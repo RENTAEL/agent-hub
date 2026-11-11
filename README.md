@@ -369,4 +369,4 @@ agent-hub/
 
 ## License
 
-Add a license of your choice (MIT is a common pick) before publishing.
+[MIT](LICENSE)
