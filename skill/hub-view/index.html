@@ -39,8 +39,8 @@ main{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:16px;
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);backdrop-filter:blur(14px);overflow:hidden;animation:rise .7s cubic-bezier(.2,.8,.2,1) both}
 .panel h2{margin:0;padding:14px 18px 6px;font-size:12px;letter-spacing:1.2px;text-transform:uppercase;color:var(--dim);font-weight:600}
 @keyframes rise{from{opacity:0;transform:translateY(14px)}}
-#map svg{width:100%;height:auto;display:block}
-.node-label{font-size:13px;font-weight:600;fill:var(--text)}
+#map svg{width:100%;height:auto;max-height:58vh;display:block;margin:0 auto}
+.node-label{font-size:12px;font-weight:600;fill:var(--text)}
 .node-sub{font-size:10.5px;fill:var(--dim)}
 .node-count{font-size:11px;font-weight:600}
 .ring{transform-box:fill-box;transform-origin:center}
@@ -52,8 +52,9 @@ main{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:16px;
 .link.hot{opacity:.9}
 @keyframes dash{to{stroke-dashoffset:-20}}
 .down{opacity:.35;filter:grayscale(1)}
-#feed{display:flex;flex-direction:column}
-#feedList{list-style:none;margin:0;padding:6px 12px 14px;overflow:auto;max-height:380px}
+/* contain:size lets the feed take the map's height instead of growing the row; the list scrolls inside it. */
+#feed{display:flex;flex-direction:column;contain:size}
+#feedList{list-style:none;margin:0;padding:6px 12px 14px;overflow:auto;flex:1;min-height:0}
 #feedList li{display:flex;gap:10px;align-items:flex-start;padding:8px 8px;border-radius:10px;animation:slide .5s cubic-bezier(.2,.8,.2,1) both;cursor:pointer}
 #feedList li:hover{background:rgba(255,255,255,.04)}
 @keyframes slide{from{opacity:0;transform:translateX(18px)}}
@@ -107,7 +108,7 @@ main{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:16px;
 .md ul{padding-left:20px}
 .hint{color:var(--dim);font-size:12px}
 footer{padding:0 24px 22px;color:var(--dim);font-size:12px}
-@media (max-width:1000px){main{grid-template-columns:1fr}#board{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:1000px){main{grid-template-columns:1fr}#feed{contain:none}#feedList{max-height:380px}#board{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:560px){header,main,footer{padding-left:16px;padding-right:16px}#board{grid-template-columns:1fr}.stats{margin-left:0}}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
 </style>
@@ -138,7 +139,7 @@ const AG = {
   claude:   { name:'Claude',    color:'var(--claude)',    x:320, y:200, sub:'lead · reviews and tests' },
   opencode: { name:'OpenCode',  color:'var(--opencode)',  x:110, y:92,  sub:'cloud · free 1M-context' },
   omniroute:{ name:'OmniRoute', color:'var(--omniroute)', x:530, y:92,  sub:'cloud · free model gateway' },
-  ollama:   { name:'Ollama',    color:'var(--ollama)',    x:320, y:328, sub:'local · stays on this PC' },
+  ollama:   { name:'Ollama',    color:'var(--ollama)',    x:320, y:318, sub:'local · stays on this PC' },
 };
 const COLS = [
   { key:'open', label:'Queued', match:s=>s==='open' },
@@ -171,12 +172,12 @@ for (const k of ['opencode','omniroute','ollama']) {
 const particleLayer = mk('g', {});
 for (const [k, a] of Object.entries(AG)) {
   const g = mk('g', { transform:`translate(${a.x},${a.y})` });
-  const r = k === 'claude' ? 40 : 30;
+  const r = k === 'claude' ? 42 : 38; // wide enough for "OmniRoute" inside the ring
   const ring = mk('circle', { r, fill:'none', stroke:a.color, 'stroke-width':2, class:'ring' }, g);
   mk('circle', { r, fill:`url(#g-${k})`, class:'core', style:`animation-delay:${Math.random()*2}s` }, g);
   mk('circle', { r:r-9, fill:'#0a0f1c', opacity:.55 }, g);
   const t = mk('text', { y:5, 'text-anchor':'middle', class:'node-label' }, g); t.textContent = a.name;
-  const ly = k === 'ollama' ? r + 16 : -r - 22;
+  const ly = k === 'ollama' ? r + 16 : -r - 28;
   const sub = mk('text', { y:ly, 'text-anchor':'middle', class:'node-sub' }, g); sub.textContent = a.sub;
   const cnt = mk('text', { y:ly + 14, 'text-anchor':'middle', class:'node-count', fill:a.color }, g);
   const tip = mk('title', {}, g);
@@ -236,10 +237,11 @@ const STAT_DEF = [
 ];
 $('stats').innerHTML = STAT_DEF.map(([l, , c], i) => `<div class="stat"><span>${l}</span><strong id="st${i}" style="color:${c}">0</strong></div>`).join('');
 function countTo(el, v) {
+  cancelAnimationFrame(el._raf); // the newest call wins: an older count-up must not finish on a stale value
   const from = Number(el.textContent) || 0; if (from === v) return;
   const t0 = performance.now();
-  const step = (t) => { const p = Math.min(1, (t - t0) / 700); el.textContent = Math.round(from + (v - from) * (1 - Math.pow(1 - p, 3))); if (p < 1) requestAnimationFrame(step); };
-  requestAnimationFrame(step);
+  const step = (t) => { const p = Math.min(1, (t - t0) / 700); el.textContent = Math.round(from + (v - from) * (1 - Math.pow(1 - p, 3))); el._raf = p < 1 ? requestAnimationFrame(step) : 0; };
+  el._raf = requestAnimationFrame(step);
 }
 const renderStats = () => STAT_DEF.forEach(([, f], i) => countTo($('st' + i), f(state.list)));
 
@@ -266,7 +268,7 @@ function cardHTML(n) {
   const name = (AG[n.to] || {}).name || n.to;
   const prev = n.status === 'done' ? n.verdictPreview : n.taskPreview;
   return `<div class="t">${esc(n.group)}</div>
-  <div class="m"><span class="tag agent">${esc(name)}</span><span class="tag">r${n.round}</span>${n.kind ? `<span class="tag">${esc(n.kind)}</span>` : ''}${n.local ? '<span class="tag local">local only</span>' : ''}<span>${ago(n.mtime)}</span></div>
+  <div class="m"><span class="tag agent">${esc(name)}</span><span class="tag">r${n.round}</span>${n.kind ? `<span class="tag">${esc(n.kind)}</span>` : ''}${n.local ? '<span class="tag local">local only</span>' : ''}<span data-t="${n.mtime}">${ago(n.mtime)}</span></div>
   ${n.model ? `<div class="m">${esc(n.model)}</div>` : ''}
   ${prev ? `<div class="p">${esc(prev.replace(/[#*`>]/g, ''))}</div>` : ''}`;
 }
