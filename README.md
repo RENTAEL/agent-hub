@@ -71,7 +71,7 @@ and `hub-ask --to` picks who gets each job.
 ### Step 1: Get the files
 
 ```bash
-git clone https://github.com/<you>/agent-hub.git
+git clone https://github.com/RENTAEL/agent-hub.git
 cd agent-hub
 ```
 
