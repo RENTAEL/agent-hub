@@ -9,6 +9,8 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { hasSecret, CLOUD, OPENCODE_FREE } from './agent-bridge.mjs';
+import { loadTeam, loadState } from './team.mjs';
+import { pickSeats } from './pick-seats.mjs';
 
 const VAULT = process.env.OBSIDIAN_VAULT || path.join(os.homedir(), 'Documents', 'Obsidian Vault');
 const TASKS = path.join(VAULT, 'agents', 'tasks');
@@ -25,7 +27,7 @@ const HOW = {
 };
 
 // Flags come first; the first non-flag word (or a bare --) starts the brief, so "--to" inside a brief is just text.
-const FLAGS = ['name', 'kind', 'round', 'to', 'file', 'model', 'wait', 'attach'];
+const FLAGS = ['name', 'kind', 'round', 'to', 'file', 'model', 'wait', 'attach', 'seats'];
 const o = { model: [], attach: [] }, a = process.argv.slice(2);
 let i = 0;
 for (; i < a.length; i += 2) {
@@ -36,7 +38,8 @@ for (; i < a.length; i += 2) {
   Array.isArray(o[k]) ? o[k].push(a[i + 1]) : (o[k] = a[i + 1]);
 }
 const { name, kind = 'code', round = '1', file, wait = '900' } = o;
-let to = (o.to || 'opencode,ollama,omniroute').split(',').map((s) => s.trim()).filter(Boolean);
+// --to takes runner names (opencode, ollama, omniroute) or seat ids from team.json; without it, seats are picked from the team.
+let to = o.to ? o.to.split(',').map((s) => s.trim()).filter(Boolean) : null;
 
 // Local-only folders (customer data, live keys): their jobs go to Ollama only. Longest matching path wins.
 const RULES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'local-only.json');
@@ -52,10 +55,18 @@ const isLocal = (p) => {
 };
 const inputs = [...o.attach, ...(file ? [file] : [])];
 const touched = [real(process.cwd()), ...inputs.map(real)].filter(isLocal);
-if (touched.length && to.some((t) => CLOUD.has(t))) {
-  if (o.to) { console.error(`refused: ${touched[0]} is a local-only folder (see local-only.json), so cloud agents can't have this job. Use --to ollama.`); process.exit(1); }
-  console.error(`local-only folder (${touched[0]}): sending to ollama only`);
-  to = ['ollama'];
+const team = loadTeam();
+const seatOf = (t) => team.find((s) => s.id === t);
+const runnerOf = (t) => seatOf(t)?.runner || t;
+if (!to) {
+  // Best idle seats from different providers, always one local; private jobs get local seats only.
+  const picked = pickSeats(team, loadState(), { n: Math.max(1, Number(o.seats) || 3), wantLocal: true, localOnly: touched.length > 0 });
+  to = picked.length ? picked.map((s) => s.id) : touched.length ? ['ollama'] : ['opencode', 'ollama', 'omniroute'];
+  if (touched.length) console.error(`local-only folder (${touched[0]}): local seats only`);
+}
+if (touched.length && to.some((t) => CLOUD.has(runnerOf(t)))) {
+  console.error(`refused: ${touched[0]} is a local-only folder (see local-only.json), so cloud agents can't have this job. Use --to ollama.`);
+  process.exit(1);
 }
 const models = { ...MODELS[kind] };
 for (const m of o.model) { const [k, v] = m.split(/=(.*)/s); models[k] = v; }
@@ -76,7 +87,7 @@ for (const f of o.attach) {
   brief += `\n\nFILE: ${rel}\n\`\`\`${path.extname(f).slice(1)}\n${buf.toString('utf8').replace(/```/g, '\\`\\`\\`')}\n\`\`\``;
 }
 // Cloud agents never get credential-shaped text; Ollama runs on this PC and may.
-const cloud = to.filter((t) => CLOUD.has(t));
+const cloud = to.filter((t) => CLOUD.has(runnerOf(t)));
 if (cloud.length && hasSecret(brief)) {
   console.error(`refused: the brief or an attached file holds something shaped like a credential, and ${cloud.join(', ')} send prompts to cloud models. Remove it, or use --to ollama.`);
   process.exit(1);
@@ -100,7 +111,7 @@ const taken = notes.filter((p) => fs.existsSync(p));
 if (taken.length) { console.error(`exists, not overwriting (use a new --round or --name):\n${taken.join('\n')}`); process.exit(1); }
 to.forEach((agent, n) => {
   const p = notes[n];
-  fs.writeFileSync(p, `---\ntype: agent-task\nfrom: claude\nto: ${agent}\nmodel: ${models[agent] || ''}\n${touched.length ? 'local: true\n' : ''}status: open\ngroup: ${safe}\nround: ${round}\nkind: ${kind}\ncreated: ${day}\nhub: "[[Agent hub]]"\ntags: [agent-task]\n---\n\n## Task\n${brief}\n\n${HOW[kind]}\n`, { flag: 'wx' });
+  fs.writeFileSync(p, `---\ntype: agent-task\nfrom: claude\nto: ${runnerOf(agent)}\nmodel: ${seatOf(agent)?.model || models[agent] || ''}\n${seatOf(agent) ? `seat: ${agent}\n` : ''}${touched.length ? 'local: true\n' : ''}status: open\ngroup: ${safe}\nround: ${round}\nkind: ${kind}\ncreated: ${day}\nhub: "[[Agent hub]]"\ntags: [agent-task]\n---\n\n## Task\n${brief}\n\n${HOW[kind]}\n`, { flag: 'wx' });
 });
 console.error(`wrote ${notes.length} task note(s); waiting for replies`);
 
@@ -108,7 +119,7 @@ const status = (p) => (fs.readFileSync(p, 'utf8').match(/^status:\s*(\S+)/m) || 
 const deadline = Date.now() + Number(wait) * 1000;
 for (;;) {
   // The login watcher normally answers; a one-shot run is a no-op while it is alive.
-  spawnSync(process.execPath, [BRIDGE], { stdio: 'ignore' });
+  spawnSync(process.execPath, [BRIDGE], { stdio: 'ignore', windowsHide: true });
   const left = notes.filter((p) => !['answered', 'failed'].includes(status(p)));
   if (!left.length || Date.now() > deadline) break;
   await new Promise((r) => setTimeout(r, 10000));

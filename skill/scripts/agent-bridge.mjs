@@ -9,6 +9,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { gatewayKey, loadTeam, loadState, markSeat, liveWriter, seatId } from './team.mjs';
+import { pickSeats } from './pick-seats.mjs';
 
 const VAULT = process.env.OBSIDIAN_VAULT || path.join(os.homedir(), 'Documents', 'Obsidian Vault');
 const TASKS = path.join(VAULT, 'agents', 'tasks');
@@ -63,49 +65,92 @@ export function setField(text, key, value) {
   const m = text.match(/^---\r?\n([\s\S]*?)(\r?\n---)/);
   if (!m) return text;
   const re = new RegExp(`^${key}:.*$`, 'm');
-  const fm = re.test(m[1]) ? m[1].replace(re, `${key}: ${value}`) : `${m[1]}\n${key}: ${value}`;
+  const line = `${key}: ${String(value).replace(/[\r\n]+/g, ' ')}`; // one line, so a value can never add keys
+  const fm = re.test(m[1]) ? m[1].replace(re, () => line) : `${m[1]}\n${line}`;
   return `---\n${fm}${m[2]}` + text.slice(m[0].length);
 }
 
-function gatewayKey() {
-  const k = process.env.OMNIROUTE_API_KEY || process.env.LMSTUDIO_API_KEY;
-  if (k) return k;
-  if (process.platform !== 'win32') return '';
-  return execFileSync('powershell', ['-NoProfile', '-Command', "[Environment]::GetEnvironmentVariable('LMSTUDIO_API_KEY','User')"]).toString().trim();
+// The key is read once per bridge run (one hidden PowerShell call), not once per task.
+let KEY;
+const key = () => (KEY ??= gatewayKey());
+
+// Read a streamed response line by line; onLine gets each non-empty line.
+async function streamLines(res, onLine) {
+  const dec = new TextDecoder();
+  let buf = '';
+  for await (const chunk of res.body) {
+    buf += dec.decode(chunk, { stream: true });
+    let i;
+    while ((i = buf.indexOf('\n')) >= 0) { const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1); if (line) onLine(line); }
+  }
+  if (buf.trim()) onLine(buf.trim());
 }
 
-async function postJson(url, body, headers = {}) {
+async function post(url, body, headers = {}) {
   const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body), signal: AbortSignal.timeout(TIMEOUT_MS) });
-  const j = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(`${res.status} ${j.error?.message || j.error || ''}`.slice(0, 300));
-  return j;
+  if (!res.ok) { const j = await res.json().catch(() => ({})); throw new Error(`${res.status} ${j.error?.message || j.error || ''}`.slice(0, 300)); }
+  return res;
 }
 
+const quiet = { think() {}, write() {} };
+const errText = (e) => String(e?.message ?? (typeof e === 'object' ? JSON.stringify(e) : e)).slice(0, 300);
+// Each runner streams: thinking text to live.think, answer text to live.write, and returns the full answer.
 const agents = {
-  async omniroute(task, model) {
-    const key = gatewayKey();
-    const ask = (m) => postJson('http://localhost:20128/v1/chat/completions', { model: m, messages: [{ role: 'user', content: task }] }, key ? { authorization: `Bearer ${key}` } : {});
-    let j = await ask(model || 'free');
-    // Auto combos sometimes land on a reasoning model that returns no content; retry once on the plain free combo.
-    if (!j.choices?.[0]?.message?.content?.trim() && (model || 'free') !== 'free') j = await ask('free');
-    return { text: j.choices?.[0]?.message?.content ?? '', model: j.model || model || 'free' };
+  async omniroute(task, model, live = quiet) {
+    const k = key();
+    const res = await post('http://localhost:20128/v1/chat/completions', { model: model || 'free', stream: true, messages: [{ role: 'user', content: task }] }, k ? { authorization: `Bearer ${k}` } : {});
+    let text = '', used = model || 'free', sse = false, finished = false, plain = '';
+    await streamLines(res, (line) => {
+      if (!line.startsWith('data:')) { plain += line + '\n'; return; }
+      sse = true;
+      if (line === 'data: [DONE]') { finished = true; return; }
+      let j; try { j = JSON.parse(line.slice(5)); } catch { return; }
+      if (j.error) throw new Error(errText(j.error));
+      used = j.model || used;
+      const c = j.choices?.[0] || {}, d = c.delta || {};
+      if (c.finish_reason) finished = true;
+      const think = d.reasoning_content || d.reasoning;
+      if (think) live.think(think);
+      if (d.content) { text += d.content; live.write(d.content); }
+    });
+    // A gateway that ignored stream:true sends one plain JSON body instead.
+    if (!sse) {
+      let j; try { j = JSON.parse(plain); } catch { throw new Error(`not a stream or JSON reply: ${plain.slice(0, 120)}`); }
+      if (j.error) throw new Error(errText(j.error));
+      const m = j.choices?.[0]?.message || {};
+      if (m.reasoning_content || m.reasoning) live.think(m.reasoning_content || m.reasoning);
+      if (m.content) live.write(m.content);
+      return { text: m.content || '', model: j.model || used };
+    }
+    // A stream cut off before its end marker is a partial answer, not a success.
+    if (!finished) throw new Error(`stream ended early after ${text.length} chars`);
+    return { text, model: used };
   },
-  async ollama(task, model) {
+  async ollama(task, model, live = quiet) {
     if (!model) {
       const tags = await fetch('http://localhost:11434/api/tags', { signal: AbortSignal.timeout(10000) }).then((r) => r.json());
       model = process.env.OLLAMA_MODEL || tags.models?.[0]?.name;
       if (!model) throw new Error('no Ollama model installed');
     }
-    const j = await postJson('http://localhost:11434/api/chat', { model, stream: false, messages: [{ role: 'user', content: task }] });
-    return { text: j.message?.content ?? '', model };
+    const res = await post('http://localhost:11434/api/chat', { model, stream: true, messages: [{ role: 'user', content: task }] });
+    let text = '', done = false;
+    await streamLines(res, (line) => {
+      let j; try { j = JSON.parse(line); } catch { return; }
+      if (j.error) throw new Error(errText(j.error));
+      if (j.message?.thinking) live.think(j.message.thinking);
+      if (j.message?.content) { text += j.message.content; live.write(j.message.content); }
+      if (j.done) done = true;
+    });
+    if (!done) throw new Error(`stream ended early after ${text.length} chars`);
+    return { text, model };
   },
   // Free models only, largest context first. A failure (quota, "Nothing to compact yet", truncation) moves to the next.
-  opencode: async (task, model) => {
+  opencode: async (task, model, live = quiet) => {
     const chain = [...new Set([model, ...OPENCODE_FREE].filter(Boolean))];
     const errs = [];
     for (const m of chain) {
       if (!/free/i.test(m)) { errs.push(`${m}: refused, not a free model`); continue; }
-      try { return await runOpencode(task, m); } catch (e) { errs.push(`${m}: ${e.message.slice(-160)}`); }
+      try { return await runOpencode(task, m, live); } catch (e) { errs.push(`${m}: ${e.message.slice(-160)}`); }
     }
     throw new Error(errs.join(' | '));
   },
@@ -123,7 +168,7 @@ const LEAN_CONFIG = JSON.stringify({
   permission: Object.fromEntries(['*', 'read', 'edit', 'bash', 'webfetch', 'websearch', 'glob', 'grep', 'list', 'external_directory', 'task'].map((k) => [k, 'deny'])),
 }, null, 2);
 
-function runOpencode(task, model) {
+function runOpencode(task, model, live = { write() {} }) {
   {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-hub-'));
     const leanFile = path.join(LEAN, 'opencode', 'opencode.json');
@@ -134,9 +179,9 @@ function runOpencode(task, model) {
     const args = ['run', '--standalone', '--model', model, '--title', 'agent-hub task', prompt];
     return new Promise((resolve, reject) => {
       const env = { ...process.env, XDG_CONFIG_HOME: LEAN };
-      const p = spawn(fs.existsSync(OPENCODE) ? OPENCODE : 'opencode', args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
+      const p = spawn(fs.existsSync(OPENCODE) ? OPENCODE : 'opencode', args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
       let out = '', err = '';
-      p.stdout.on('data', (d) => (out += d));
+      p.stdout.on('data', (d) => { out += d; live.write(String(d).replace(/\x1b\[[0-9;]*m/g, '')); });
       p.stderr.on('data', (d) => (err += d));
       p.on('error', reject);
       // An exhausted free quota hangs instead of exiting, so give each model 4 minutes before moving on.
@@ -150,44 +195,94 @@ function runOpencode(task, model) {
   }
 }
 
+// Seats running right now in this bridge, so failover prefers an idle one.
+const busySeats = new Set();
+// Each runner has its own slot limit (Ollama shares one GPU); a failover to another runner waits for a free slot there.
+const slots = {};
+async function withSlot(runner, fn) {
+  const s = (slots[runner] ||= { used: 0, queue: [] });
+  if (s.used >= (PARALLEL[runner] || 1)) await new Promise((r) => s.queue.push(r));
+  else s.used++;
+  try { return await fn(); } finally { const next = s.queue.shift(); if (next) next(); else s.used--; }
+}
+
+const MAX_SEATS = 3; // a task tries at most this many seats before it fails
 async function handle(file) {
   let text = fs.readFileSync(file, 'utf8');
   const note = parse(text);
   // A note stuck on "working" (the bridge was killed) is retried once it is older than the timeout.
   const stale = note?.fm.status === 'working' && Date.now() - fs.statSync(file).mtimeMs > TIMEOUT_MS + 60000;
   if (!note || note.fm.type !== 'agent-task' || !(note.fm.status === 'open' || stale) || note.fm.to === 'claude') return false;
-  const agent = agents[note.fm.to];
   const stamp = () => new Date().toISOString().slice(0, 16).replace('T', ' ');
-  if (!agent || !note.task) {
-    fs.writeFileSync(file, setField(text, 'status', 'failed').trimEnd() + `\n\n## Reply\n> [!failure] ${!agent ? `unknown agent "${note.fm.to}"` : 'no "## Task" section'}\n`);
+  if (!agents[note.fm.to] || !note.task) {
+    fs.writeFileSync(file, setField(text, 'status', 'failed').trimEnd() + `\n\n## Reply\n> [!failure] ${!agents[note.fm.to] ? `unknown agent "${note.fm.to}"` : 'no "## Task" section'}\n`);
     return true;
   }
-  if (CLOUD.has(note.fm.to) && (hasSecret(note.task) || note.fm.local === 'true')) {
-    const why = note.fm.local === 'true' ? 'the task came from a local-only folder' : 'the task holds something shaped like a credential';
+  const secret = hasSecret(note.task), local = note.fm.local === 'true';
+  if (CLOUD.has(note.fm.to) && (secret || local)) {
+    const why = local ? 'the task came from a local-only folder' : 'the task holds something shaped like a credential';
     fs.writeFileSync(file, setField(text, 'status', 'failed').trimEnd() + `\n\n## Reply\n> [!failure] refused: ${why}, and ${note.fm.to} sends prompts to cloud models. Send the task to ollama.\n`);
     return true;
   }
   fs.writeFileSync(file, setField(text, 'status', 'working'));
   console.log(`-> ${note.fm.to}: ${path.basename(file)}`);
+  const job = note.fm.group || path.basename(file, '.md');
+  const team = loadTeam();
+  // The first seat is the one the note names; a note without a seat (older notes, --to <runner>) gets one made up.
+  // A seat id becomes a file name, so an unknown one is never used as given.
+  const named = team.find((s) => s.id === note.fm.seat);
+  let seat = named || { id: seatId(note.fm.to, note.fm.model || 'default'), runner: note.fm.to, model: note.fm.model, provider: note.fm.to, local: note.fm.to === 'ollama' };
+  // A hand-edited seat: line must not move private work onto a cloud seat.
+  if ((secret || local) && !seat.local) {
+    const now = fs.readFileSync(file, 'utf8');
+    fs.writeFileSync(file, setField(now, 'status', 'failed').trimEnd() + `\n\n## Reply\n> [!failure] refused: this task is private, and seat ${seat.id} is a cloud model. Use a local seat.\n`);
+    return true;
+  }
+  const tried = [], errors = [];
   let status, reply;
-  try {
-    const r = await agent(note.task, note.fm.model);
-    if (!r.text.trim()) throw new Error(`empty reply from ${r.model}`);
-    status = 'answered';
-    reply = `## Reply\n*From ${note.fm.to} (${r.model}), ${stamp()}. Untrusted until Claude reviews it.*\n\n${r.text.trim()}\n`;
-  } catch (e) {
-    status = 'failed';
-    reply = `## Reply\n> [!failure] ${note.fm.to} failed ${stamp()}: ${e.message.replace(/\s+/g, ' ')}\n`;
+  for (;;) {
+    const cur = seat; // the catch below may move seat on to the next one
+    let live = null;
+    busySeats.add(cur.id);
+    try {
+      // The live file starts once the seat has a free slot, so a queued task never overwrites a running one.
+      const r = await withSlot(cur.runner, () => { live = liveWriter(cur.id, path.basename(file), job); return agents[cur.runner](note.task, cur.model, live); });
+      if (!r.text.trim()) throw new Error(`empty reply from ${r.model}`);
+      live.end(true);
+      markSeat(seat.id, true);
+      status = 'answered';
+      const via = tried.length ? ` after ${tried.length} failed seat(s): ${errors.join('; ')}` : '';
+      reply = `## Reply\n*From ${seat.runner} (${r.model}), ${stamp()}${via}. Untrusted until Claude reviews it.*\n\n${r.text.trim()}\n`;
+      break;
+    } catch (e) {
+      const msg = errText(e).replace(/\s+/g, ' ');
+      (live || liveWriter(cur.id, path.basename(file), job)).end(false, msg);
+      markSeat(seat.id, false, msg);
+      tried.push(seat.id); errors.push(`${seat.id}: ${msg.slice(0, 160)}`);
+      console.log(`   ${seat.id} failed: ${msg.slice(0, 120)}`);
+      // Fail over to an idle seat on another provider. Private work only ever moves to local seats.
+      const next = tried.length < MAX_SEATS && pickSeats(team, loadState(), { n: 1, localOnly: secret || local || seat.local, exclude: tried, busy: busySeats, avoidProviders: [seat.provider] })[0];
+      if (!next) {
+        status = 'failed';
+        reply = `## Reply\n> [!failure] ${tried.length} seat(s) failed ${stamp()}: ${errors.join(' | ')}\n`;
+        break;
+      }
+      console.log(`   failover -> ${next.id}`);
+      seat = next;
+    } finally {
+      busySeats.delete(cur.id);
+    }
   }
   // Build on the note as it is now, so edits made while the agent worked are kept.
-  const now = fs.readFileSync(file, 'utf8');
-  fs.writeFileSync(file, setField(setField(now, 'status', status), 'answered', stamp()).trimEnd() + `\n\n${reply}`);
+  let now = fs.readFileSync(file, 'utf8');
+  for (const [k, v] of [['status', status], ['answered', stamp()], ['to', seat.runner], ['model', seat.model || ''], ['seat', seat.id], ...(tried.length ? [['tried', tried.join(',')]] : [])]) now = setField(now, k, v);
+  fs.writeFileSync(file, now.trimEnd() + `\n\n${reply}`);
   console.log(`<- ${status}: ${path.basename(file)}`);
   return true;
 }
 
-// Tasks each agent may run at once. Ollama shares one 8 GB GPU, so it gets fewer. Override: HUB_PARALLEL_OPENCODE=5 etc.
-export const PARALLEL = Object.fromEntries(Object.entries({ opencode: 3, omniroute: 4, ollama: 2 })
+// Tasks each runner may run at once. OmniRoute spreads over many providers; Ollama shares one 8 GB GPU. Override: HUB_PARALLEL_OPENCODE=5 etc.
+export const PARALLEL = Object.fromEntries(Object.entries({ opencode: 3, omniroute: 8, ollama: 2 })
   .map(([k, v]) => [k, Math.max(1, Number(process.env[`HUB_PARALLEL_${k.toUpperCase()}`]) || v)]));
 const inflight = new Map(); // note path -> promise
 const running = {}; // agent -> tasks in flight

@@ -267,13 +267,42 @@ Every setting is an environment variable. All are optional.
 | `OLLAMA_MODEL` | Ollama model when a note sets none | first installed model |
 | `OPENCODE_EXE` | path to the OpenCode executable | npm global install, then PATH |
 | `HUB_PARALLEL_OPENCODE` | OpenCode tasks running at once | `3` |
-| `HUB_PARALLEL_OMNIROUTE` | OmniRoute tasks running at once | `4` |
+| `HUB_PARALLEL_OMNIROUTE` | OmniRoute tasks running at once | `8` |
 | `HUB_PARALLEL_OLLAMA` | Ollama tasks running at once | `2` (one 8 GB GPU) |
 | `HUB_VIEW_PORT` | live view port | `4317` |
+| `HUB_DIR` | team, state and live files | `%LOCALAPPDATA%\agent-hub` |
 
 Fixed endpoints: Ollama at `localhost:11434`, OmniRoute at `localhost:20128`.
 Each task times out after 10 minutes; each OpenCode model gets 4 minutes before
 the bridge tries the next one.
+
+### The team (seats and failover)
+
+`node skill/scripts/team.mjs --build` probes every free model and writes a team
+of "seats" to `team.json`:
+- OpenRouter `:free`, Cloudflare, Groq, Gemini and DuckDuckGo through OmniRoute;
+- every local Ollama model;
+- the OpenCode free models.
+
+Paid models are never added. `node team.mjs` lists the seats and their wins and fails.
+
+- **Picking seats.** Without `--to`, `hub-ask` picks `--seats N` seats (default
+  3) from different providers, always including one local seat. Seats come from
+  `pick-seats.mjs`; failed and cooling seats are skipped.
+- **Failover.** When a seat fails (quota, rate limit, empty or cut-off reply),
+  the bridge retries on an idle seat from another provider, up to 3 seats. The
+  note's `tried:` field records the failed ones. A seat that hit a quota or rate
+  limit cools down for 30 minutes; any other failure cools it for 5.
+- **Private work.** Notes marked `local: true`, or holding a credential, only
+  ever run on, or fail over to, local seats.
+- **Live view.** Each seat streams its thinking and answer to `live/<seat>.json`.
+  On the live view, each provider is a cluster of dots around Claude: busy seats
+  glow, failing seats turn red. Click a dot to watch its output stream live.
+- **Claude's own subagents.** To show them on the map, add
+  `scripts/hub-claude-hook.mjs` as a `SubagentStart` and `SubagentStop` command
+  hook in Claude Code.
+
+The file formats are in `skill/hub-view/TEAM-CONTRACT.md`.
 
 ---
 

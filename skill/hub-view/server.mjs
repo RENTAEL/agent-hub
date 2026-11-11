@@ -15,6 +15,8 @@ const VAULT = process.env.OBSIDIAN_VAULT || path.join(os.homedir(), 'Documents',
 const TASKS = path.join(VAULT, 'agents', 'tasks');
 const LOCK = path.join(os.tmpdir(), 'agent-hub-bridge.pid');
 const OPENCODE = path.join(process.env.APPDATA || '', 'npm', 'node_modules', '@opencode', 'cli', 'bin', 'opencode.exe');
+// Team files written by the bridge (see the team data contract). HUB_DIR points tests at a fake folder.
+const HUB = process.env.HUB_DIR || path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'agent-hub');
 
 function parse(text) {
   const t = text.replace(/\r\n/g, '\n');
@@ -110,6 +112,36 @@ async function checkHealth() {
   return changed;
 }
 
+// Team: seats from team.json, joined with team-state.json and a short summary of each live file.
+// Missing or half-written files read as empty, so the map just shows an empty team.
+const readJson = (p, d) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')) ?? d; } catch { return d; } };
+const SAFE_ID = /^[\w.@+-]{1,200}$/;
+const seatList = () => { const t = readJson(path.join(HUB, 'team.json'), {}); return (Array.isArray(t.seats) ? t.seats : []).filter((s) => s && typeof s.id === 'string' && SAFE_ID.test(s.id)); };
+const liveCache = new Map(); // seatId -> { mtime, summary }: live files can be long, so parse only when they change
+function liveSummary(id) {
+  const p = path.join(HUB, 'live', id + '.json');
+  let m; try { m = fs.statSync(p).mtimeMs; } catch { liveCache.delete(id); return null; }
+  const c = liveCache.get(id); if (c && c.mtime === m) return c.summary;
+  const j = readJson(p, null);
+  if (!j || typeof j !== 'object') return c ? c.summary : null; // mid-write: keep the last good one
+  const summary = { status: j.status || '', note: j.note || '', job: j.job || '', started: j.started || 0, updated: j.updated || 0, chars: String(j.text || '').length + String(j.thinking || '').length };
+  liveCache.set(id, { mtime: m, summary });
+  return summary;
+}
+function team() {
+  const st = readJson(path.join(HUB, 'team-state.json'), {});
+  const seats = seatList().map((s) => {
+    const x = (st && typeof st[s.id] === 'object' && st[s.id]) || {};
+    return { id: s.id, runner: s.runner || '', model: s.model || s.id, provider: s.provider || s.runner || 'other', local: !!s.local, ok: s.ok !== false, ms: s.ms || 0,
+      downUntil: x.downUntil || 0, lastError: x.lastError || '', lastOk: x.lastOk || 0, wins: x.wins || 0, fails: x.fails || 0, live: liveSummary(s.id) };
+  });
+  const ag = readJson(path.join(HUB, 'claude-agents.json'), {});
+  const claude = Object.entries(ag && typeof ag === 'object' ? ag : {}).filter(([, a]) => a && typeof a === 'object')
+    .map(([id, a]) => ({ id, type: a.type || 'agent', started: a.started || 0, stopped: a.stopped || null, session: a.session || '' }))
+    .sort((a, b) => b.started - a.started).slice(0, 40);
+  return { seats, claude, now: Date.now() };
+}
+
 const clients = new Set();
 const push = () => { const d = `data: ${JSON.stringify(summary())}\n\n`; for (const c of clients) c.write(d); };
 let timer;
@@ -133,6 +165,25 @@ const server = http.createServer((req, res) => {
     // Only names already listed from the tasks folder: no path is ever built from the request.
     const n = notes.get(url.searchParams.get('id') || '');
     return n ? send(200, 'application/json', JSON.stringify({ ...n, task: n.sec.task || '', reply: n.sec.reply || '', verdict: n.sec['claude verdict'] || '' })) : send(404, 'text/plain', 'not found');
+  }
+  if (url.pathname === '/team') return send(200, 'application/json', JSON.stringify(team()));
+  if (url.pathname === '/live') {
+    // The id must be a seat listed in team.json (and filesystem-safe), so no path comes from the request alone.
+    const id = url.searchParams.get('seat') || '';
+    if (!SAFE_ID.test(id) || !seatList().some((s) => s.id === id)) return send(404, 'text/plain', 'not found');
+    const file = path.join(HUB, 'live', id + '.json');
+    res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
+    let last = -1, beats = 0;
+    const tick = () => {
+      let m = 0; try { m = fs.statSync(file).mtimeMs; } catch {}
+      if (m && m !== last) { const j = readJson(file, null); if (j && typeof j === 'object') { last = m; res.write(`data: ${JSON.stringify(j)}\n\n`); } }
+      if (++beats % 40 === 0) res.write(': ping\n\n');
+    };
+    tick();
+    const iv = setInterval(tick, 500);
+    const stop = () => clearInterval(iv);
+    req.on('close', stop); res.on('error', stop);
+    return;
   }
   if (url.pathname === '/events') {
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
