@@ -1,0 +1,4 @@
+# Your own folder rules: they name your private projects.
+skill/scripts/local-only.json
+node_modules/
+*.log

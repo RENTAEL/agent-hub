@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Hub Live</title>
+<style>
+:root{
+  --bg:#070a12; --panel:rgba(18,24,40,.62); --line:rgba(148,163,184,.14); --text:#e5e9f2; --dim:#8b95ab;
+  --claude:#e8875f; --opencode:#38bdf8; --ollama:#a3e635; --omniroute:#c084fc; --other:#94a3b8;
+  --open:#94a3b8; --working:#fbbf24; --answered:#38bdf8; --failed:#f87171; --done:#4ade80;
+  --r:16px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--text);font:14px/1.45 "Segoe UI Variable","Segoe UI",system-ui,sans-serif;overflow-x:hidden}
+.aurora{position:fixed;inset:-20%;z-index:-2;filter:blur(90px);opacity:.55;pointer-events:none}
+.aurora i{position:absolute;width:42vmax;height:42vmax;border-radius:50%;animation:drift 26s ease-in-out infinite alternate}
+.aurora i:nth-child(1){background:#1e3a8a;left:-5%;top:0}
+.aurora i:nth-child(2){background:#581c87;right:0;top:10%;animation-duration:32s}
+.aurora i:nth-child(3){background:#0e7490;left:30%;bottom:-10%;animation-duration:38s}
+@keyframes drift{to{transform:translate(8vmax,-6vmax) scale(1.15)}}
+.grid{position:fixed;inset:0;z-index:-1;pointer-events:none;background-image:linear-gradient(var(--line) 1px,transparent 1px),linear-gradient(90deg,var(--line) 1px,transparent 1px);background-size:44px 44px;mask-image:radial-gradient(ellipse at 50% 30%,#000 20%,transparent 75%);opacity:.5}
+header{display:flex;align-items:center;gap:18px;padding:18px 24px;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:12px;font-weight:650;font-size:20px;letter-spacing:.2px}
+.logo{width:34px;height:34px;border-radius:10px;background:conic-gradient(from 0deg,var(--claude),var(--opencode),var(--ollama),var(--omniroute),var(--claude));animation:spin 8s linear infinite;position:relative}
+.logo::after{content:"";position:absolute;inset:4px;border-radius:7px;background:var(--bg)}
+@keyframes spin{to{transform:rotate(360deg)}}
+.live{display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--dim);padding:4px 10px;border:1px solid var(--line);border-radius:99px}
+.live b{width:8px;height:8px;border-radius:50%;background:var(--done);box-shadow:0 0 0 0 var(--done);animation:beat 1.6s infinite}
+.live.off b{background:var(--failed);animation:none}
+@keyframes beat{0%{box-shadow:0 0 0 0 rgba(74,222,128,.6)}70%{box-shadow:0 0 0 9px rgba(74,222,128,0)}100%{box-shadow:0 0 0 0 rgba(74,222,128,0)}}
+.stats{display:flex;gap:10px;margin-left:auto;flex-wrap:wrap}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:6px 14px;min-width:92px;backdrop-filter:blur(12px)}
+.stat span{display:block;font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.8px}
+.stat strong{font-size:22px;font-variant-numeric:tabular-nums}
+.clock{color:var(--dim);font-variant-numeric:tabular-nums;font-size:13px}
+main{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:16px;padding:0 24px 24px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);backdrop-filter:blur(14px);overflow:hidden;animation:rise .7s cubic-bezier(.2,.8,.2,1) both}
+.panel h2{margin:0;padding:14px 18px 6px;font-size:12px;letter-spacing:1.2px;text-transform:uppercase;color:var(--dim);font-weight:600}
+@keyframes rise{from{opacity:0;transform:translateY(14px)}}
+#map svg{width:100%;height:auto;display:block}
+.node-label{font-size:13px;font-weight:600;fill:var(--text)}
+.node-sub{font-size:10.5px;fill:var(--dim)}
+.node-count{font-size:11px;font-weight:600}
+.ring{transform-box:fill-box;transform-origin:center}
+.ring.on{animation:ring 1.8s ease-out infinite}
+@keyframes ring{from{transform:scale(1);opacity:.9}to{transform:scale(1.9);opacity:0}}
+.core{transform-box:fill-box;transform-origin:center;animation:breathe 4s ease-in-out infinite}
+@keyframes breathe{50%{transform:scale(1.06)}}
+.link{stroke-width:1.4;stroke-dasharray:3 7;animation:dash 1.2s linear infinite;opacity:.35}
+.link.hot{opacity:.9}
+@keyframes dash{to{stroke-dashoffset:-20}}
+.down{opacity:.35;filter:grayscale(1)}
+#feed{display:flex;flex-direction:column}
+#feedList{list-style:none;margin:0;padding:6px 12px 14px;overflow:auto;max-height:380px}
+#feedList li{display:flex;gap:10px;align-items:flex-start;padding:8px 8px;border-radius:10px;animation:slide .5s cubic-bezier(.2,.8,.2,1) both;cursor:pointer}
+#feedList li:hover{background:rgba(255,255,255,.04)}
+@keyframes slide{from{opacity:0;transform:translateX(18px)}}
+.dot{width:9px;height:9px;border-radius:50%;margin-top:6px;flex:none}
+.feed-t{font-size:11px;color:var(--dim);margin-left:auto;white-space:nowrap}
+.board-wrap{grid-column:1/-1}
+#board{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;padding:6px 14px 16px}
+.col{min-height:120px}
+.col-h{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;padding:4px 4px 10px;color:var(--dim);text-transform:uppercase;letter-spacing:.8px}
+.col-h em{font-style:normal;margin-left:auto;background:rgba(255,255,255,.06);padding:1px 8px;border-radius:99px;font-variant-numeric:tabular-nums}
+.cards{display:flex;flex-direction:column;gap:9px;max-height:560px;overflow:auto;padding:2px 4px 4px 2px}
+.card{position:relative;background:rgba(10,14,26,.72);border:1px solid var(--line);border-radius:12px;padding:10px 12px 10px 15px;cursor:pointer;transition:border-color .25s,box-shadow .25s,transform .25s}
+.card:hover{transform:translateY(-2px);border-color:rgba(255,255,255,.22)}
+.card::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:3px;border-radius:3px;background:var(--a)}
+.card.new{animation:pop .55s cubic-bezier(.2,.9,.3,1.3) both}
+@keyframes pop{from{opacity:0;transform:scale(.9) translateY(10px)}}
+.card .t{font-weight:600;font-size:13px;line-height:1.3;word-break:break-word}
+.card .m{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px;font-size:11px;color:var(--dim)}
+.tag{padding:1px 7px;border-radius:99px;background:rgba(255,255,255,.06);white-space:nowrap}
+.tag.agent{color:var(--a);background:color-mix(in srgb,var(--a) 14%,transparent)}
+.tag.local{color:var(--ollama)}
+.card .p{margin-top:6px;font-size:11.5px;color:#aab3c5;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.card.working{border-color:rgba(251,191,36,.35)}
+.card.working::after{content:"";position:absolute;left:0;right:0;bottom:0;height:2px;border-radius:0 0 12px 12px;background:linear-gradient(90deg,transparent,var(--working),transparent);background-size:50% 100%;background-repeat:no-repeat;animation:scan 1.3s linear infinite}
+@keyframes scan{from{background-position:-50% 0}to{background-position:150% 0}}
+.card.answered{box-shadow:0 0 0 1px rgba(56,189,248,.35),0 0 22px -6px rgba(56,189,248,.6);animation:glow 2.4s ease-in-out infinite}
+@keyframes glow{50%{box-shadow:0 0 0 1px rgba(56,189,248,.15),0 0 10px -6px rgba(56,189,248,.3)}}
+.card.failed{border-color:rgba(248,113,113,.45)}
+.more{font-size:12px;color:var(--dim);text-align:center;padding:6px}
+.empty{font-size:12px;color:var(--dim);text-align:center;padding:22px 6px;border:1px dashed var(--line);border-radius:12px}
+#drawer{position:fixed;top:0;right:0;height:100%;width:min(720px,100%);background:rgba(10,13,24,.97);border-left:1px solid var(--line);transform:translateX(102%);transition:transform .45s cubic-bezier(.2,.8,.2,1);z-index:10;display:flex;flex-direction:column;backdrop-filter:blur(18px)}
+#drawer.open{transform:none}
+#scrim{position:fixed;inset:0;background:rgba(0,0,0,.45);opacity:0;pointer-events:none;transition:opacity .35s;z-index:9}
+#scrim.open{opacity:1;pointer-events:auto}
+.d-head{padding:18px 22px 10px;border-bottom:1px solid var(--line)}
+.d-head h3{margin:0 0 8px;font-size:17px}
+.d-close{position:absolute;right:16px;top:14px;background:none;border:1px solid var(--line);color:var(--text);border-radius:9px;width:32px;height:32px;cursor:pointer;font-size:16px}
+.tabs{display:flex;gap:6px;padding:10px 22px 0}
+.tabs button{background:none;border:1px solid transparent;color:var(--dim);padding:6px 14px;border-radius:9px;cursor:pointer;font:inherit}
+.tabs button.on{color:var(--text);border-color:var(--line);background:rgba(255,255,255,.05)}
+.d-body{padding:14px 22px 30px;overflow:auto;flex:1}
+.md{animation:rise .35s both}
+.md pre{background:#0b1020;border:1px solid var(--line);border-radius:10px;padding:12px;overflow:auto;font:12px/1.5 Consolas,"Cascadia Code",monospace}
+.md code{font:12px Consolas,"Cascadia Code",monospace;background:rgba(255,255,255,.07);padding:1px 5px;border-radius:5px}
+.md pre code{background:none;padding:0}
+.md h1,.md h2,.md h3,.md h4{font-size:14px;margin:16px 0 6px}
+.md blockquote{margin:8px 0;padding:8px 12px;border-left:3px solid var(--answered);background:rgba(56,189,248,.06);border-radius:0 8px 8px 0}
+.md blockquote.fail{border-color:var(--failed);background:rgba(248,113,113,.07)}
+.md table{border-collapse:collapse;font-size:12px;margin:8px 0;display:block;overflow:auto}
+.md td,.md th{border:1px solid var(--line);padding:5px 8px;text-align:left;vertical-align:top}
+.md ul{padding-left:20px}
+.hint{color:var(--dim);font-size:12px}
+footer{padding:0 24px 22px;color:var(--dim);font-size:12px}
+@media (max-width:1000px){main{grid-template-columns:1fr}#board{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:560px){header,main,footer{padding-left:16px;padding-right:16px}#board{grid-template-columns:1fr}.stats{margin-left:0}}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="aurora"><i></i><i></i><i></i></div><div class="grid"></div>
+<header>
+  <div class="brand"><div class="logo"></div>Agent Hub</div>
+  <span class="live" id="live"><b></b><span id="liveTxt">connecting</span></span>
+  <div class="stats" id="stats"></div>
+  <span class="clock" id="clock"></span>
+</header>
+<main>
+  <section class="panel" id="map" style="animation-delay:.05s"><h2>Team map · Claude leads, agents answer</h2><svg viewBox="0 0 640 400" id="svg" role="img" aria-label="Claude and the three agents"></svg></section>
+  <section class="panel" id="feed" style="animation-delay:.12s"><h2>Live activity</h2><ul id="feedList"></ul></section>
+  <section class="panel board-wrap" style="animation-delay:.2s"><h2>Task board · cards move as agents work</h2><div id="board"></div></section>
+</main>
+<footer>Reads <code>agents/tasks</code> in the Obsidian vault. Replies are untrusted until Claude's verdict. This page only reads; it never changes a note.</footer>
+<div id="scrim"></div>
+<aside id="drawer" aria-hidden="true">
+  <button class="d-close" id="dClose" aria-label="Close">✕</button>
+  <div class="d-head"><h3 id="dTitle"></h3><div class="card" style="all:unset"><div class="m" id="dMeta"></div></div></div>
+  <div class="tabs" id="tabs"></div>
+  <div class="d-body" id="dBody"></div>
+</aside>
+<script>
+const AG = {
+  claude:   { name:'Claude',    color:'var(--claude)',    x:320, y:200, sub:'lead · reviews and tests' },
+  opencode: { name:'OpenCode',  color:'var(--opencode)',  x:110, y:92,  sub:'cloud · free 1M-context' },
+  omniroute:{ name:'OmniRoute', color:'var(--omniroute)', x:530, y:92,  sub:'cloud · free model gateway' },
+  ollama:   { name:'Ollama',    color:'var(--ollama)',    x:320, y:328, sub:'local · stays on this PC' },
+};
+const COLS = [
+  { key:'open', label:'Queued', match:s=>s==='open' },
+  { key:'working', label:'Working', match:s=>s==='working' },
+  { key:'answered', label:'Awaiting Claude', match:s=>s==='answered'||s==='failed' },
+  { key:'done', label:'Done · verdict written', match:s=>s==='done' },
+];
+const STATUS_COLOR = { open:'var(--open)', working:'var(--working)', answered:'var(--answered)', failed:'var(--failed)', done:'var(--done)', new:'var(--open)' };
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+const agentColor = (a) => (AG[a] || {}).color || 'var(--other)';
+const ago = (t) => { const s = Math.max(0, (Date.now() - t) / 1000); return s < 60 ? `${s|0}s ago` : s < 3600 ? `${(s/60)|0}m ago` : s < 86400 ? `${(s/3600)|0}h ago` : `${(s/86400)|0}d ago`; };
+let state = { list:[], events:[], health:{} };
+
+/* ---------- team map ---------- */
+const NS = 'http://www.w3.org/2000/svg';
+const svg = $('svg');
+const mk = (tag, attrs, parent = svg) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); parent.appendChild(e); return e; };
+const defs = mk('defs', {});
+for (const [k, a] of Object.entries(AG)) {
+  const g = mk('radialGradient', { id:`g-${k}` }, defs);
+  mk('stop', { offset:'0%', 'stop-color':a.color, 'stop-opacity':'.95' }, g);
+  mk('stop', { offset:'100%', 'stop-color':a.color, 'stop-opacity':'.15' }, g);
+}
+const links = {}, nodes = {};
+for (const k of ['opencode','omniroute','ollama']) {
+  const a = AG[k], c = AG.claude;
+  links[k] = mk('line', { x1:c.x, y1:c.y, x2:a.x, y2:a.y, class:'link', stroke:a.color });
+}
+const particleLayer = mk('g', {});
+for (const [k, a] of Object.entries(AG)) {
+  const g = mk('g', { transform:`translate(${a.x},${a.y})` });
+  const r = k === 'claude' ? 40 : 30;
+  const ring = mk('circle', { r, fill:'none', stroke:a.color, 'stroke-width':2, class:'ring' }, g);
+  mk('circle', { r, fill:`url(#g-${k})`, class:'core', style:`animation-delay:${Math.random()*2}s` }, g);
+  mk('circle', { r:r-9, fill:'#0a0f1c', opacity:.55 }, g);
+  const t = mk('text', { y:5, 'text-anchor':'middle', class:'node-label' }, g); t.textContent = a.name;
+  const ly = k === 'ollama' ? r + 16 : -r - 22;
+  const sub = mk('text', { y:ly, 'text-anchor':'middle', class:'node-sub' }, g); sub.textContent = a.sub;
+  const cnt = mk('text', { y:ly + 14, 'text-anchor':'middle', class:'node-count', fill:a.color }, g);
+  const tip = mk('title', {}, g);
+  nodes[k] = { g, ring, cnt, tip };
+}
+// Particles: outbound (Claude -> agent) for queued and working tasks; inbound (agent -> Claude) for answers waiting on Claude.
+let flows = {};
+const particles = [];
+function syncParticles() {
+  for (const k of ['opencode','omniroute','ollama']) {
+    const f = flows[k] || { out:0, back:0 };
+    for (const dir of ['out','back']) {
+      const want = Math.min(6, f[dir]) * 2;
+      const have = particles.filter((p) => p.k === k && p.dir === dir);
+      for (let i = have.length; i < want; i++) particles.push({ k, dir, t: Math.random(), speed: .0035 + Math.random() * .003, el: mk('circle', { r: dir === 'out' ? 3 : 3.6, fill: dir === 'out' ? 'var(--working)' : AG[k].color }, particleLayer) });
+      for (let i = want; i < have.length; i++) { have[i].el.remove(); particles.splice(particles.indexOf(have[i]), 1); }
+    }
+    links[k].classList.toggle('hot', f.out + f.back > 0);
+  }
+}
+(function tick() {
+  const c = AG.claude;
+  for (const p of particles) {
+    p.t = (p.t + p.speed) % 1;
+    const a = AG[p.k], t = p.dir === 'out' ? p.t : 1 - p.t;
+    p.el.setAttribute('cx', c.x + (a.x - c.x) * t);
+    p.el.setAttribute('cy', c.y + (a.y - c.y) * t);
+    p.el.setAttribute('opacity', Math.sin(Math.PI * p.t).toFixed(2));
+  }
+  requestAnimationFrame(tick);
+})();
+function renderMap() {
+  flows = {};
+  const by = (k, s) => state.list.filter((n) => n.to === k && s.includes(n.status)).length;
+  for (const k of ['opencode','omniroute','ollama']) {
+    flows[k] = { out: by(k, ['open','working']), back: by(k, ['answered']) };
+    const h = state.health[k] || {};
+    nodes[k].g.classList.toggle('down', h.up === false);
+    nodes[k].ring.classList.toggle('on', by(k, ['working']) > 0);
+    nodes[k].cnt.textContent = by(k, ['working']) ? `working on ${by(k, ['working'])}` : by(k, ['answered']) ? `${by(k, ['answered'])} answer(s) to review` : h.up === false ? 'offline' : 'idle';
+    nodes[k].tip.textContent = `${AG[k].name}: ${h.detail || ''}`;
+  }
+  const review = state.list.filter((n) => n.status === 'answered' || n.status === 'failed').length;
+  nodes.claude.ring.classList.toggle('on', review > 0);
+  nodes.claude.cnt.textContent = review ? `${review} to review` : 'all reviewed';
+  nodes.claude.tip.textContent = `Claude: ${(state.health.claude || {}).detail || ''}`;
+  syncParticles();
+}
+
+/* ---------- stats with count-up ---------- */
+const STAT_DEF = [
+  ['Queued', (l) => l.filter((n) => n.status === 'open').length, 'var(--open)'],
+  ['Working', (l) => l.filter((n) => n.status === 'working').length, 'var(--working)'],
+  ['To review', (l) => l.filter((n) => n.status === 'answered').length, 'var(--answered)'],
+  ['Failed', (l) => l.filter((n) => n.status === 'failed').length, 'var(--failed)'],
+  ['Done', (l) => l.filter((n) => n.status === 'done').length, 'var(--done)'],
+];
+$('stats').innerHTML = STAT_DEF.map(([l, , c], i) => `<div class="stat"><span>${l}</span><strong id="st${i}" style="color:${c}">0</strong></div>`).join('');
+function countTo(el, v) {
+  const from = Number(el.textContent) || 0; if (from === v) return;
+  const t0 = performance.now();
+  const step = (t) => { const p = Math.min(1, (t - t0) / 700); el.textContent = Math.round(from + (v - from) * (1 - Math.pow(1 - p, 3))); if (p < 1) requestAnimationFrame(step); };
+  requestAnimationFrame(step);
+}
+const renderStats = () => STAT_DEF.forEach(([, f], i) => countTo($('st' + i), f(state.list)));
+
+/* ---------- feed ---------- */
+const VERB = { open:'got a new task', working:'started working', answered:'answered', failed:'failed', done:'closed with Claude’s verdict' };
+let feedKeys = new Set();
+function renderFeed() {
+  let items = state.events.map((e) => ({ key:`${e.id}|${e.to}|${e.t}`, t:e.t, id:e.id, agent:e.agent, status:e.to, text:`${e.group} · r${e.round}` }));
+  if (items.length < 12) {
+    // Fill with the latest note updates so the feed is never empty right after start.
+    const seen = new Set(items.map((i) => i.id));
+    for (const n of state.list) { if (items.length >= 25) break; if (!seen.has(n.id)) items.push({ key:`${n.id}|${n.status}|${n.mtime}`, t:n.mtime, id:n.id, agent:n.to, status:n.status, text:`${n.group} · r${n.round}` }); }
+  }
+  items.sort((a, b) => b.t - a.t);
+  const ul = $('feedList');
+  ul.innerHTML = items.slice(0, 40).map((i) => `<li data-id="${esc(i.id)}" style="${feedKeys.has(i.key) ? 'animation:none' : ''}"><span class="dot" style="background:${STATUS_COLOR[i.status] || 'var(--open)'}"></span><span><b style="color:${agentColor(i.agent)}">${esc((AG[i.agent] || {}).name || i.agent)}</b> ${esc(VERB[i.status] || i.status)}<br><span class="hint">${esc(i.text)}</span></span><span class="feed-t" data-t="${i.t}">${ago(i.t)}</span></li>`).join('') || '<li class="hint">No hub activity yet.</li>';
+  feedKeys = new Set(items.map((i) => i.key));
+}
+
+/* ---------- board with FLIP moves ---------- */
+const cardEls = new Map();
+const LIMIT = 30;
+function cardHTML(n) {
+  const name = (AG[n.to] || {}).name || n.to;
+  const prev = n.status === 'done' ? n.verdictPreview : n.taskPreview;
+  return `<div class="t">${esc(n.group)}</div>
+  <div class="m"><span class="tag agent">${esc(name)}</span><span class="tag">r${n.round}</span>${n.kind ? `<span class="tag">${esc(n.kind)}</span>` : ''}${n.local ? '<span class="tag local">local only</span>' : ''}<span>${ago(n.mtime)}</span></div>
+  ${n.model ? `<div class="m">${esc(n.model)}</div>` : ''}
+  ${prev ? `<div class="p">${esc(prev.replace(/[#*`>]/g, ''))}</div>` : ''}`;
+}
+function renderBoard() {
+  const board = $('board');
+  if (!board.children.length) board.innerHTML = COLS.map((c) => `<div class="col" data-col="${c.key}"><div class="col-h"><span class="dot" style="background:${STATUS_COLOR[c.key]}"></span>${c.label}<em>0</em></div><div class="cards"></div></div>`).join('');
+  const first = new Map();
+  for (const [id, el] of cardEls) first.set(id, el.getBoundingClientRect());
+  const keep = new Set();
+  for (const c of COLS) {
+    const col = board.querySelector(`[data-col="${c.key}"]`), box = col.querySelector('.cards');
+    const all = state.list.filter((n) => c.match(n.status));
+    col.querySelector('em').textContent = all.length;
+    box.querySelectorAll('.more,.empty').forEach((e) => e.remove());
+    for (const n of all.slice(0, LIMIT)) {
+      let el = cardEls.get(n.id);
+      if (!el) { el = document.createElement('div'); el.className = 'card new'; el.dataset.id = n.id; cardEls.set(n.id, el); }
+      el.className = `card ${n.status}${el.classList.contains('new') && !first.has(n.id) ? ' new' : ''}`;
+      el.style.setProperty('--a', agentColor(n.to));
+      const html = cardHTML(n); if (el._html !== html) { el.innerHTML = html; el._html = html; }
+      box.appendChild(el); keep.add(n.id);
+    }
+    if (all.length > LIMIT) box.insertAdjacentHTML('beforeend', `<div class="more">+${all.length - LIMIT} older</div>`);
+    if (!all.length) box.insertAdjacentHTML('beforeend', '<div class="empty">nothing here</div>');
+  }
+  for (const [id, el] of cardEls) if (!keep.has(id)) { el.remove(); cardEls.delete(id); }
+  // FLIP: slide each card from where it was to where it is now.
+  for (const [id, el] of cardEls) {
+    const a = first.get(id); if (!a) continue;
+    const b = el.getBoundingClientRect(), dx = a.left - b.left, dy = a.top - b.top;
+    if (Math.abs(dx) + Math.abs(dy) < 2) continue;
+    el.animate([{ transform:`translate(${dx}px,${dy}px)` }, { transform:'none' }], { duration:650, easing:'cubic-bezier(.2,.8,.2,1)' });
+  }
+}
+
+/* ---------- drawer ---------- */
+function md(src) {
+  const inline = (s) => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/(^|\W)\*([^*\n]+)\*(?=\W|$)/g, '$1<em>$2</em>');
+  const lines = String(src || '').replace(/\r/g, '').split('\n'); const out = []; let i = 0;
+  while (i < lines.length) {
+    const l = lines[i];
+    if (/^\s*```/.test(l)) { const buf = []; i++; while (i < lines.length && !/^\s*```/.test(lines[i])) buf.push(lines[i++]); i++; out.push(`<pre><code>${esc(buf.join('\n'))}</code></pre>`); continue; }
+    if (/^\s*\|/.test(l)) { const rows = []; while (i < lines.length && /^\s*\|/.test(lines[i])) rows.push(lines[i++]); out.push('<table>' + rows.filter((r) => !/^\s*\|[\s:|-]+\|\s*$/.test(r)).map((r, ri) => '<tr>' + r.trim().replace(/^\||\|$/g, '').split('|').map((c) => ri ? `<td>${inline(c.trim())}</td>` : `<th>${inline(c.trim())}</th>`).join('') + '</tr>').join('') + '</table>'); continue; }
+    if (/^>/.test(l)) { const buf = []; while (i < lines.length && /^>/.test(lines[i])) buf.push(lines[i++].replace(/^>\s?/, '')); const fail = /\[!failure\]/.test(buf[0]); out.push(`<blockquote class="${fail ? 'fail' : ''}">${buf.map((b) => inline(b.replace(/\[!\w+\]\s*/, ''))).join('<br>')}</blockquote>`); continue; }
+    if (/^\s*[-*] /.test(l)) { const buf = []; while (i < lines.length && /^\s*[-*] /.test(lines[i])) buf.push(lines[i++].replace(/^\s*[-*] /, '')); out.push('<ul>' + buf.map((b) => `<li>${inline(b)}</li>`).join('') + '</ul>'); continue; }
+    const h = l.match(/^(#{1,4}) (.*)/); if (h) { out.push(`<h${h[1].length + 1}>${inline(h[2])}</h${h[1].length + 1}>`); i++; continue; }
+    if (l.trim()) out.push(`<p>${inline(l)}</p>`);
+    i++;
+  }
+  return `<div class="md">${out.join('')}</div>`;
+}
+let openId = null, openTab = 'reply', openMtime = 0;
+async function openNote(id) {
+  openId = id;
+  const r = await fetch('/api/note?id=' + encodeURIComponent(id)); if (!r.ok) return;
+  const n = await r.json();
+  openMtime = n.mtime;
+  $('dTitle').textContent = n.title;
+  $('dMeta').innerHTML = `<span class="tag agent" style="--a:${agentColor(n.to)}">${esc((AG[n.to] || {}).name || n.to)}</span><span class="tag" style="color:${STATUS_COLOR[n.status]}">${esc(n.status)}</span><span class="tag">round ${n.round}</span>${n.kind ? `<span class="tag">${esc(n.kind)}</span>` : ''}${n.local ? '<span class="tag local">local only</span>' : ''}${n.model ? `<span class="tag">${esc(n.model)}</span>` : ''}<span>from ${esc(n.from)} · ${ago(n.mtime)}</span>`;
+  const tabs = [['task', 'What it was asked', n.task], ['reply', 'Its answer', n.reply], ['verdict', 'Claude’s check', n.verdict]];
+  if (!n.reply && openTab === 'reply') openTab = 'task';
+  const paint = () => {
+    $('tabs').innerHTML = tabs.map(([k, l, v]) => `<button data-tab="${k}" class="${k === openTab ? 'on' : ''}">${l}${v ? '' : ' ·'}</button>`).join('');
+    const cur = tabs.find((t) => t[0] === openTab);
+    $('dBody').innerHTML = cur[2] ? md(cur[2]) : `<p class="hint">${openTab === 'reply' ? 'No answer yet: the agent is still on it.' : openTab === 'verdict' ? 'Claude has not checked this answer yet.' : 'Empty.'}</p>`;
+  };
+  $('tabs').onclick = (e) => { const b = e.target.closest('button'); if (b) { openTab = b.dataset.tab; paint(); } };
+  paint();
+  $('drawer').classList.add('open'); $('scrim').classList.add('open'); $('drawer').setAttribute('aria-hidden', 'false');
+}
+const closeDrawer = () => { openId = null; $('drawer').classList.remove('open'); $('scrim').classList.remove('open'); $('drawer').setAttribute('aria-hidden', 'true'); };
+$('dClose').onclick = closeDrawer; $('scrim').onclick = closeDrawer;
+addEventListener('keydown', (e) => e.key === 'Escape' && closeDrawer());
+document.addEventListener('click', (e) => { const el = e.target.closest('.card[data-id],#feedList li[data-id]'); if (el) { openTab = 'reply'; openNote(el.dataset.id); } });
+
+/* ---------- live stream ---------- */
+function render() {
+  renderStats(); renderMap(); renderFeed(); renderBoard();
+  const n = openId && state.list.find((x) => x.id === openId);
+  if (n && n.mtime !== openMtime) openNote(openId); // refresh the open note only when it changed
+}
+function connect() {
+  const es = new EventSource('/events');
+  es.onopen = () => { $('live').classList.remove('off'); $('liveTxt').textContent = 'live'; };
+  es.onmessage = (e) => { state = JSON.parse(e.data); render(); };
+  es.onerror = () => { $('live').classList.add('off'); $('liveTxt').textContent = 'reconnecting'; };
+}
+connect();
+setInterval(() => {
+  $('clock').textContent = new Date().toLocaleTimeString();
+  document.querySelectorAll('[data-t]').forEach((e) => (e.textContent = ago(Number(e.dataset.t))));
+}, 1000);
+</script>
+</body>
+</html>
