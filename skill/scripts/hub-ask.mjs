@@ -86,8 +86,15 @@ brief = brief.replace(/^## /gm, '### ');
 if (!name || !brief || !HOW[kind]) { console.error('need --name, --kind code|research and a brief'); process.exit(2); }
 
 const day = new Date().toISOString().slice(0, 10);
-const safe = name.replace(/[\\/:*?"<>|#^[\]]/g, '-');
-const notes = to.map((agent) => path.join(TASKS, `${day} ${safe} - r${round} - ${agent}.md`));
+let safe = name.replace(/[\\/:*?"<>|#^[\]]/g, '-');
+const noteFor = (agent) => path.join(TASKS, `${day} ${safe} - r${round} - ${agent}.md`);
+// Several chats can use the hub at once: a new job (round 1) whose name another chat already took today gets " 2", " 3"...
+if (Number(round) === 1) {
+  const base = safe;
+  for (let k = 2; to.some((a) => fs.existsSync(noteFor(a))); k++) safe = `${base} ${k}`;
+  if (safe !== base) console.error(`name taken today, using --name "${safe}" (use it for later rounds)`);
+}
+const notes = to.map(noteFor);
 const taken = notes.filter((p) => fs.existsSync(p));
 // Check all first, so a clash never leaves half the round written.
 if (taken.length) { console.error(`exists, not overwriting (use a new --round or --name):\n${taken.join('\n')}`); process.exit(1); }

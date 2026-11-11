@@ -40,17 +40,27 @@ main{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:16px;
 .panel h2{margin:0;padding:14px 18px 6px;font-size:12px;letter-spacing:1.2px;text-transform:uppercase;color:var(--dim);font-weight:600}
 @keyframes rise{from{opacity:0;transform:translateY(14px)}}
 #map svg{width:100%;height:auto;max-height:58vh;display:block;margin:0 auto}
-.node-label{font-size:12px;font-weight:600;fill:var(--text)}
-.node-sub{font-size:10.5px;fill:var(--dim)}
-.node-count{font-size:11px;font-weight:600}
-.ring{transform-box:fill-box;transform-origin:center}
+.node-label{font-size:13px;font-weight:650;fill:#f4f6fb;letter-spacing:.2px}
+.node-done{font-size:9.5px;fill:#c3cad8;font-variant-numeric:tabular-nums}
+.node-sub{font-size:10px;fill:var(--dim);letter-spacing:.6px;text-transform:uppercase}
+.pill-t{font-size:10.5px;font-weight:650}
+.orbit{fill:none;stroke:rgba(148,163,184,.13);stroke-width:1;stroke-dasharray:2 7}
+.radar{fill:none;stroke:rgba(232,135,95,.10)}
+.spin{transform-box:fill-box;transform-origin:center;animation:spin 36s linear infinite}
+.spin.rev{animation-direction:reverse;animation-duration:52s}
+.ring{transform-box:fill-box;transform-origin:center;opacity:0}
 .ring.on{animation:ring 1.8s ease-out infinite}
-@keyframes ring{from{transform:scale(1);opacity:.9}to{transform:scale(1.9);opacity:0}}
+@keyframes ring{from{transform:scale(1);opacity:.9}to{transform:scale(1.7);opacity:0}}
 .core{transform-box:fill-box;transform-origin:center;animation:breathe 4s ease-in-out infinite}
-@keyframes breathe{50%{transform:scale(1.06)}}
-.link{stroke-width:1.4;stroke-dasharray:3 7;animation:dash 1.2s linear infinite;opacity:.35}
-.link.hot{opacity:.9}
-@keyframes dash{to{stroke-dashoffset:-20}}
+@keyframes breathe{50%{transform:scale(1.04)}}
+.halo{transform-box:fill-box;transform-origin:center;animation:halo 5s ease-in-out infinite}
+@keyframes halo{50%{opacity:.55}}
+.arc{fill:none;stroke-linecap:round;transition:stroke-dasharray .8s cubic-bezier(.2,.8,.2,1)}
+.wire{fill:none;stroke-width:2.2;opacity:.38;transition:opacity .4s}
+.wire.hot{opacity:.95}
+.flow{fill:none;stroke:#fff;stroke-width:1.2;stroke-dasharray:2 10;opacity:0;animation:dash 1s linear infinite;transition:opacity .4s}
+.flow.hot{opacity:.55}
+@keyframes dash{to{stroke-dashoffset:-24}}
 .down{opacity:.35;filter:grayscale(1)}
 /* contain:size lets the feed take the map's height instead of growing the row; the list scrolls inside it. */
 #feed{display:flex;flex-direction:column;contain:size}
@@ -136,10 +146,11 @@ footer{padding:0 24px 22px;color:var(--dim);font-size:12px}
 </aside>
 <script>
 const AG = {
-  claude:   { name:'Claude',    color:'var(--claude)',    x:320, y:200, sub:'lead · reviews and tests' },
-  opencode: { name:'OpenCode',  color:'var(--opencode)',  x:110, y:92,  sub:'cloud · free 1M-context' },
-  omniroute:{ name:'OmniRoute', color:'var(--omniroute)', x:530, y:92,  sub:'cloud · free model gateway' },
-  ollama:   { name:'Ollama',    color:'var(--ollama)',    x:320, y:318, sub:'local · stays on this PC' },
+  // The three agents sit evenly on an orbit (ellipse rx 175, ry 120) around Claude.
+  claude:   { name:'Claude',    color:'var(--claude)',    hex:'#e8875f', x:320, y:205, sub:'lead · reviews and tests' },
+  opencode: { name:'OpenCode',  color:'var(--opencode)',  hex:'#38bdf8', x:168, y:145, sub:'cloud · free 1M-context' },
+  omniroute:{ name:'OmniRoute', color:'var(--omniroute)', hex:'#c084fc', x:472, y:145, sub:'cloud · model gateway' },
+  ollama:   { name:'Ollama',    color:'var(--ollama)',    hex:'#a3e635', x:320, y:325, sub:'local · stays on this PC' },
 };
 const COLS = [
   { key:'open', label:'Queued', match:s=>s==='open' },
@@ -158,71 +169,125 @@ let state = { list:[], events:[], health:{} };
 const NS = 'http://www.w3.org/2000/svg';
 const svg = $('svg');
 const mk = (tag, attrs, parent = svg) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); parent.appendChild(e); return e; };
+const AGENTS = ['opencode','omniroute','ollama'];
+const C = AG.claude;
 const defs = mk('defs', {});
+const glow = mk('filter', { id:'glow', x:'-60%', y:'-60%', width:'220%', height:'220%' }, defs);
+mk('feGaussianBlur', { stdDeviation:'2.6', result:'b' }, glow);
+const merge = mk('feMerge', {}, glow); mk('feMergeNode', { in:'b' }, merge); mk('feMergeNode', { in:'SourceGraphic' }, merge);
+const soft = mk('filter', { id:'soft', x:'-100%', y:'-100%', width:'300%', height:'300%' }, defs);
+mk('feGaussianBlur', { stdDeviation:'14' }, soft);
 for (const [k, a] of Object.entries(AG)) {
-  const g = mk('radialGradient', { id:`g-${k}` }, defs);
-  mk('stop', { offset:'0%', 'stop-color':a.color, 'stop-opacity':'.95' }, g);
-  mk('stop', { offset:'100%', 'stop-color':a.color, 'stop-opacity':'.15' }, g);
+  const g = mk('radialGradient', { id:`g-${k}`, cx:'35%', cy:'30%', r:'75%' }, defs);
+  mk('stop', { offset:'0%', 'stop-color':a.hex, 'stop-opacity':'.9' }, g);
+  mk('stop', { offset:'55%', 'stop-color':a.hex, 'stop-opacity':'.35' }, g);
+  mk('stop', { offset:'100%', 'stop-color':a.hex, 'stop-opacity':'.12' }, g);
 }
-const links = {}, nodes = {};
-for (const k of ['opencode','omniroute','ollama']) {
-  const a = AG[k], c = AG.claude;
-  links[k] = mk('line', { x1:c.x, y1:c.y, x2:a.x, y2:a.y, class:'link', stroke:a.color });
+// Backdrop: a warm glow behind Claude, two radar rings, and the orbit the agents sit on.
+mk('circle', { cx:C.x, cy:C.y, r:120, fill:C.hex, opacity:.07, filter:'url(#soft)' });
+for (const r of [72, 110]) mk('circle', { cx:C.x, cy:C.y, r, class:'radar' });
+mk('ellipse', { cx:C.x, cy:C.y, rx:175, ry:120, class:'orbit' });
+// Links: a gently bowed curve from Claude to each agent, its colour fading from Claude's to the agent's.
+const curve = {}, links = {}, flowEls = {};
+for (const k of AGENTS) {
+  const a = AG[k], dx = a.x - C.x, dy = a.y - C.y, len = Math.hypot(dx, dy);
+  let nx = -dy / len, ny = dx / len;
+  if (k === 'ollama' ? nx < 0 : ny < 0) { nx = -nx; ny = -ny; } // bow away from the labels
+  const qx = (C.x + a.x) / 2 + nx * len * .16, qy = (C.y + a.y) / 2 + ny * len * .16;
+  curve[k] = [C.x, C.y, qx, qy, a.x, a.y];
+  const d = `M${C.x},${C.y} Q${qx.toFixed(1)},${qy.toFixed(1)} ${a.x},${a.y}`;
+  const lg = mk('linearGradient', { id:`l-${k}`, gradientUnits:'userSpaceOnUse', x1:C.x, y1:C.y, x2:a.x, y2:a.y }, defs);
+  mk('stop', { offset:'0%', 'stop-color':C.hex }, lg); mk('stop', { offset:'100%', 'stop-color':a.hex }, lg);
+  links[k] = mk('path', { d, class:'wire', stroke:`url(#l-${k})`, filter:'url(#glow)' });
+  flowEls[k] = mk('path', { d, class:'flow' });
 }
-const particleLayer = mk('g', {});
+const at = (k, t) => { const [x0, y0, x1, y1, x2, y2] = curve[k], u = 1 - t; return [u*u*x0 + 2*u*t*x1 + t*t*x2, u*u*y0 + 2*u*t*y1 + t*t*y2]; };
+const particleLayer = mk('g', { filter:'url(#glow)' });
+const LEN = (r) => 2 * Math.PI * r;
+const nodes = {};
 for (const [k, a] of Object.entries(AG)) {
+  const lead = k === 'claude', r = lead ? 44 : 36;
   const g = mk('g', { transform:`translate(${a.x},${a.y})` });
-  const r = k === 'claude' ? 42 : 38; // wide enough for "OmniRoute" inside the ring
-  const ring = mk('circle', { r, fill:'none', stroke:a.color, 'stroke-width':2, class:'ring' }, g);
-  mk('circle', { r, fill:`url(#g-${k})`, class:'core', style:`animation-delay:${Math.random()*2}s` }, g);
-  mk('circle', { r:r-9, fill:'#0a0f1c', opacity:.55 }, g);
-  const t = mk('text', { y:5, 'text-anchor':'middle', class:'node-label' }, g); t.textContent = a.name;
-  const ly = k === 'ollama' ? r + 16 : -r - 28;
-  const sub = mk('text', { y:ly, 'text-anchor':'middle', class:'node-sub' }, g); sub.textContent = a.sub;
-  const cnt = mk('text', { y:ly + 14, 'text-anchor':'middle', class:'node-count', fill:a.color }, g);
+  mk('circle', { r:r + 14, fill:a.hex, opacity:.28, filter:'url(#soft)', class:'halo' }, g);
+  const ring = mk('circle', { r, fill:'none', stroke:a.hex, 'stroke-width':2, class:'ring' }, g);
+  let arcOk, arcBad;
+  if (lead) {
+    // Claude: two slow counter-rotating orbits.
+    mk('circle', { r:r + 9, fill:'none', stroke:a.hex, 'stroke-opacity':.55, 'stroke-width':1.5, 'stroke-dasharray':'14 10', class:'spin' }, g);
+    mk('circle', { r:r + 15, fill:'none', stroke:a.hex, 'stroke-opacity':.25, 'stroke-width':1, 'stroke-dasharray':'2 6', class:'spin rev' }, g);
+  } else {
+    // Agents: a track ring whose arcs show the share of tasks closed (agent colour) and failed (red).
+    mk('circle', { r:r + 8, fill:'none', stroke:'rgba(255,255,255,.07)', 'stroke-width':4 }, g);
+    arcOk = mk('circle', { r:r + 8, class:'arc', stroke:a.hex, 'stroke-width':4, 'stroke-dasharray':`0 ${LEN(r + 8)}`, transform:'rotate(-90)' }, g);
+    arcBad = mk('circle', { r:r + 8, class:'arc', stroke:'#f87171', 'stroke-width':4, 'stroke-dasharray':`0 ${LEN(r + 8)}`, transform:'rotate(-90)' }, g);
+  }
+  mk('circle', { r, fill:`url(#g-${k})`, class:'core', style:`animation-delay:${(Math.random() * 2).toFixed(2)}s` }, g);
+  mk('circle', { r:r - 7, fill:'#0a0f1c', opacity:.6 }, g);
+  mk('circle', { r:r - 7, fill:'none', stroke:'rgba(255,255,255,.12)' }, g);
+  mk('text', { y:lead ? 2 : 0, 'text-anchor':'middle', class:'node-label' }, g).textContent = a.name;
+  const done = mk('text', { y:lead ? 17 : 14, 'text-anchor':'middle', class:'node-done' }, g);
+  // Role line and status pill: Ollama's sit to its right (no room below), the others above.
+  const side = k === 'ollama', lx = side ? r + 22 : 0, anchor = side ? 'start' : 'middle';
+  const subY = side ? -6 : -r - (lead ? 40 : 38), pillY = side ? 15 : -r - (lead ? 24 : 22);
+  mk('text', { x:lx, y:subY, 'text-anchor':anchor, class:'node-sub' }, g).textContent = a.sub;
+  const pill = mk('rect', { y:pillY - 11, height:17, rx:8.5, fill:a.hex, 'fill-opacity':.14, stroke:a.hex, 'stroke-opacity':.45 }, g);
+  const cnt = mk('text', { x:lx, y:pillY + 1, 'text-anchor':anchor, class:'pill-t', fill:a.hex }, g);
   const tip = mk('title', {}, g);
-  nodes[k] = { g, ring, cnt, tip };
+  nodes[k] = { g, ring, cnt, pill, side, lx, done, arcOk, arcBad, r, tip };
+}
+function setPill(n, text) {
+  if (n.cnt.textContent === text && n.pill.getAttribute('width')) return;
+  n.cnt.textContent = text;
+  const w = n.cnt.getComputedTextLength() + 18;
+  n.pill.setAttribute('width', w.toFixed(1)); n.pill.setAttribute('x', (n.side ? n.lx - 9 : -w / 2).toFixed(1));
 }
 // Particles: outbound (Claude -> agent) for queued and working tasks; inbound (agent -> Claude) for answers waiting on Claude.
 let flows = {};
 const particles = [];
 function syncParticles() {
-  for (const k of ['opencode','omniroute','ollama']) {
+  for (const k of AGENTS) {
     const f = flows[k] || { out:0, back:0 };
     for (const dir of ['out','back']) {
       const want = Math.min(6, f[dir]) * 2;
       const have = particles.filter((p) => p.k === k && p.dir === dir);
-      for (let i = have.length; i < want; i++) particles.push({ k, dir, t: Math.random(), speed: .0035 + Math.random() * .003, el: mk('circle', { r: dir === 'out' ? 3 : 3.6, fill: dir === 'out' ? 'var(--working)' : AG[k].color }, particleLayer) });
+      for (let i = have.length; i < want; i++) particles.push({ k, dir, t: Math.random(), speed: .003 + Math.random() * .003, el: mk('circle', { r: dir === 'out' ? 2.6 : 3.2, fill: dir === 'out' ? '#fbbf24' : AG[k].hex }, particleLayer) });
       for (let i = want; i < have.length; i++) { have[i].el.remove(); particles.splice(particles.indexOf(have[i]), 1); }
     }
-    links[k].classList.toggle('hot', f.out + f.back > 0);
+    const hot = f.out + f.back > 0;
+    links[k].classList.toggle('hot', hot); flowEls[k].classList.toggle('hot', hot);
   }
 }
+const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
 (function tick() {
-  const c = AG.claude;
   for (const p of particles) {
-    p.t = (p.t + p.speed) % 1;
-    const a = AG[p.k], t = p.dir === 'out' ? p.t : 1 - p.t;
-    p.el.setAttribute('cx', c.x + (a.x - c.x) * t);
-    p.el.setAttribute('cy', c.y + (a.y - c.y) * t);
-    p.el.setAttribute('opacity', Math.sin(Math.PI * p.t).toFixed(2));
+    if (!still) p.t = (p.t + p.speed) % 1;
+    const [x, y] = at(p.k, p.dir === 'out' ? p.t : 1 - p.t);
+    p.el.setAttribute('cx', x.toFixed(1)); p.el.setAttribute('cy', y.toFixed(1));
+    p.el.setAttribute('opacity', still ? '.9' : Math.sin(Math.PI * p.t).toFixed(2));
   }
   requestAnimationFrame(tick);
 })();
 function renderMap() {
   flows = {};
-  const by = (k, s) => state.list.filter((n) => n.to === k && s.includes(n.status)).length;
-  for (const k of ['opencode','omniroute','ollama']) {
-    flows[k] = { out: by(k, ['open','working']), back: by(k, ['answered']) };
-    const h = state.health[k] || {};
-    nodes[k].g.classList.toggle('down', h.up === false);
-    nodes[k].ring.classList.toggle('on', by(k, ['working']) > 0);
-    nodes[k].cnt.textContent = by(k, ['working']) ? `working on ${by(k, ['working'])}` : by(k, ['answered']) ? `${by(k, ['answered'])} answer(s) to review` : h.up === false ? 'offline' : 'idle';
-    nodes[k].tip.textContent = `${AG[k].name}: ${h.detail || ''}`;
+  const of = (k) => state.list.filter((n) => n.to === k);
+  const by = (k, s) => of(k).filter((n) => s.includes(n.status)).length;
+  for (const k of AGENTS) {
+    const n = nodes[k], h = state.health[k] || {}, all = of(k);
+    const work = by(k, ['working']), wait = by(k, ['answered']), queued = by(k, ['open']);
+    flows[k] = { out: queued + work, back: wait };
+    n.g.classList.toggle('down', h.up === false);
+    n.ring.classList.toggle('on', work > 0);
+    setPill(n, work ? `working on ${work}` : wait ? `${wait} to review` : queued ? `${queued} queued` : h.up === false ? 'offline' : 'idle');
+    const ok = all.filter((x) => x.status === 'done' && !x.failed).length, bad = all.filter((x) => x.failed).length, tot = all.length || 1, L = LEN(n.r + 8);
+    n.arcOk.setAttribute('stroke-dasharray', `${(L * ok / tot).toFixed(1)} ${L.toFixed(1)}`);
+    n.arcBad.setAttribute('stroke-dasharray', `0 ${(L * ok / tot).toFixed(1)} ${(L * bad / tot).toFixed(1)} ${L.toFixed(1)}`);
+    n.done.textContent = `${ok} done`;
+    n.tip.textContent = `${AG[k].name}: ${ok} closed, ${bad} failed, of the last ${all.length} tasks. ${h.detail || ''}`;
   }
   const review = state.list.filter((n) => n.status === 'answered' || n.status === 'failed').length;
   nodes.claude.ring.classList.toggle('on', review > 0);
-  nodes.claude.cnt.textContent = review ? `${review} to review` : 'all reviewed';
+  setPill(nodes.claude, review ? `${review} to review` : 'all reviewed');
+  nodes.claude.done.textContent = `${state.list.filter((n) => n.hasVerdict).length} verdicts`;
   nodes.claude.tip.textContent = `Claude: ${(state.health.claude || {}).detail || ''}`;
   syncParticles();
 }
