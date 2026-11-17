@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Fan one brief out to several hub agents as task notes, wait for every reply, print them for Claude to review.
-// Usage: node hub-ask.mjs --name "slugify helper" --kind code|research [--to opencode,ollama,omniroute]
+// Usage: node hub-ask.mjs --name "slugify helper" --kind code|research|sheet [--to opencode,ollama,omniroute]
 //                         [--round 2] [--model omniroute=auto/coding:free] (--file brief.md | "brief text")
 // A fix round is the same call with --round N, --to <agents that must fix>, and a brief holding Claude's review.
 import fs from 'node:fs';
@@ -21,10 +21,13 @@ const MODELS = {
   // qoder: blank = qodercli's own Auto model; it edits a staging copy of the attached files only.
   code: { omniroute: 'auto/coding:free', ollama: 'qwen2.5-coder:7b', opencode: OPENCODE_FREE[0], qoder: '' },
   research: { omniroute: 'auto/best-free', ollama: 'qwen2.5-coder:7b', opencode: OPENCODE_FREE[0] },
+  sheet: { omniroute: 'auto/best-free', ollama: 'qwen2.5-coder:7b', opencode: OPENCODE_FREE[0] },
 };
 const HOW = {
   code: 'Reply with complete files only, each as a heading line `FILE: <relative path>` followed by one fenced code block. Include a small test file. End with a short "How to run" line. No placeholders or "rest unchanged".',
   research: 'Reply with a short answer first, then the key points as bullets. Say which points you are unsure of. Name sources where you can.',
+  // make-sheet.mjs turns these blocks into .xlsx files with a Univer preview.
+  sheet: 'Reply with each spreadsheet as a line `SHEET: <name>.xlsx` followed by one fenced json block: {"sheets":[{"name":"Sheet1","header":["Col A","Col B"],"rows":[["text",12.5,true]],"widths":[20,12]}]}. Cells are text, numbers, true/false or null; a text starting with = is a formula (no links to other files or websites). Put every row in the block, no "..." or placeholders. After the blocks, add two lines on how you built it and anything you were unsure of.',
 };
 
 // Flags come first; the first non-flag word (or a bare --) starts the brief, so "--to" inside a brief is just text.
@@ -94,7 +97,7 @@ if (cloud.length && hasSecret(brief)) {
 }
 // Demote ## headings: the bridge ends the task at the next "## " line.
 brief = brief.replace(/^## /gm, '### ');
-if (!name || !brief || !HOW[kind]) { console.error('need --name, --kind code|research and a brief'); process.exit(2); }
+if (!name || !brief || !HOW[kind]) { console.error('need --name, --kind code|research|sheet and a brief'); process.exit(2); }
 
 const day = new Date().toISOString().slice(0, 10);
 let safe = name.replace(/[\\/:*?"<>|#^[\]]/g, '-');

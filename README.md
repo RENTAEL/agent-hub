@@ -28,6 +28,9 @@ flowchart LR
 - An animated live view: team map, activity feed, and a task board
   (Queued → Working → Awaiting Claude → Done). Click a card to see the task,
   the answer and Claude's verdict.
+- Spreadsheets (optional): agents can return sheets that become real `.xlsx`
+  files, previewed and edited in [Univer](https://github.com/dream-num/univer)
+  inside the live view.
 - Starts at sign-in on Windows.
 
 > Built and tested on Windows 11. The scripts are plain Node.js, so macOS and
@@ -260,6 +263,39 @@ node hub-ask.mjs --name "x" --kind code --model omniroute=auto/coding:free "..."
 Without it, each hub-ask runs its own bridge, and two of them could pick up the
 same note.
 
+### Spreadsheets from the agents (optional)
+
+One-time setup (needs npm; about 220 MB):
+
+```bash
+cd ~/.claude/skills/agent-hub/sheets
+npm install
+npm run build
+```
+
+Ask for a sheet with `--kind sheet`. The agents reply with `SHEET: <name>.xlsx`
+blocks of JSON (rows, a header, column widths; a cell starting with `=` is a
+formula):
+
+```bash
+node hub-ask.mjs --name "refund list" --kind sheet "A sheet of 5 sample cardholders with amount and a total row"
+node ../sheets/make-sheet.mjs --from "<vault>/agents/tasks/<the reply note>.md"
+```
+
+`make-sheet` reads only the `## Reply` part of the note and writes
+`%LOCALAPPDATA%\agent-hub\files\<job>\<name>.xlsx`. It prints a preview link:
+open it (or **Sheets** in the live view) to check the sheet in Univer, change
+cells, and press **Save .xlsx**. Check the numbers before you use a sheet: it is
+agent output.
+
+Why both Univer and ExcelJS: open-source Univer shows and edits sheets, but
+saving `.xlsx` needs Univer Pro and its server. ExcelJS writes the file instead,
+with no server.
+
+Safety: formulas that reach outside the workbook or run code when Excel opens
+the file (`WEBSERVICE`, `HYPERLINK`, `IMPORT…`, DDE `|` links, links to other
+files) are refused. The preview only saves from its own page.
+
 ### Other agents asking Claude
 
 Any agent (Codex, Kiro, OpenCode in normal use) can write a note with
@@ -393,6 +429,10 @@ agent-hub/
 ├── README.md                     this guide
 ├── skill/                        → ~/.claude/skills/agent-hub
 │   ├── SKILL.md                  how Claude runs the team loop
+│   ├── sheets/                   optional: agents' sheets as .xlsx + Univer preview
+│   │   ├── make-sheet.mjs        SHEET: blocks -> .xlsx (--test for the self-test)
+│   │   ├── sheet-core.mjs        spec -> Univer snapshot -> .xlsx, safety checks
+│   │   └── view.html, view-src.js  the preview page (npm run build -> dist/)
 │   ├── scripts/
 │   │   ├── agent-bridge.mjs      relays notes to agents (--watch, --selftest)
 │   │   ├── hub-ask.mjs           fans a brief out and waits for replies

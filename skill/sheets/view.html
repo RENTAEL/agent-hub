@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hub sheets</title>
+<link rel="stylesheet" href="/sheets/dist/view.css">
+<style>
+  html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; background: #fff; color: #1f2328; color-scheme: light; }
+  #bar a { color: #0b57d0; }
+  #bar { background: #f6f7f9; height: 40px; display: flex; align-items: center; gap: 12px; padding: 0 12px; border-bottom: 1px solid #ddd; box-sizing: border-box; }
+  #bar a, #bar button { font: inherit; }
+  #name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #msg { color: #555; margin-left: auto; }
+  #app { position: absolute; top: 40px; bottom: 0; left: 0; right: 0; overflow: auto; }
+  #files { line-height: 2; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <a href="/sheets/view">All sheets</a>
+  <span id="name"></span>
+  <button id="save" hidden>Save .xlsx</button>
+  <a id="dl" href="#" hidden>Download .xlsx</a>
+  <span id="msg" role="status"></span>
+</div>
+<div id="app"></div>
+<script src="/sheets/dist/view.js"></script>
+</body>
+</html>

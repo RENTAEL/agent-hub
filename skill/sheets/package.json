@@ -1,0 +1,18 @@
+{
+  "name": "agent-hub-sheets",
+  "private": true,
+  "type": "module",
+  "description": "Optional: turns agents' SHEET: blocks into .xlsx files (ExcelJS) and previews them in Univer.",
+  "dependencies": {
+    "@univerjs/presets": "1.5.2",
+    "@univerjs/preset-sheets-core": "1.5.2",
+    "exceljs": "4.4.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12"
+  },
+  "scripts": {
+    "build": "esbuild view-src.js --bundle --format=iife --minify --outfile=dist/view.js --loader:.woff=dataurl --loader:.woff2=dataurl --loader:.ttf=dataurl --loader:.svg=dataurl --loader:.png=dataurl",
+    "test": "node make-sheet.mjs --test"
+  }
+}

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Agent hub live view: a local web page showing hub task notes moving through open -> working -> answered -> done.
 // Usage: node server.mjs   then open http://127.0.0.1:4317   (HUB_VIEW_PORT to change the port)
-// Read-only: it never writes to the vault. Listens on 127.0.0.1 only.
+// It never writes to the vault; the only write is saving an edited sheet in HUB/files. Listens on 127.0.0.1 only.
 import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -152,6 +152,46 @@ setInterval(() => scan() && push(), 3000);
 setInterval(async () => (await checkHealth()) && push(), 10000);
 setInterval(() => { for (const c of clients) c.write(': ping\n\n'); }, 20000);
 
+// Sheets (optional, needs `npm install` + `npm run build` in ../sheets): agents' sheets as .xlsx, previewed in Univer.
+// Files live in HUB/files only; the request names a path relative to it and sheet-core refuses anything outside.
+const SHEETS = path.join(HERE, '..', 'sheets');
+const SHEET_CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; worker-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'";
+let sheetCore;
+async function sheets(req, res, url) {
+  const send = (code, type, body, extra = {}) => { res.writeHead(code, { 'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': SHEET_CSP, ...extra }); res.end(body); };
+  if (!fs.existsSync(path.join(SHEETS, 'dist', 'view.js'))) return send(404, 'text/plain', 'Sheets are not set up: run "npm install" and "npm run build" in the sheets folder.');
+  sheetCore ||= await import(new URL('../sheets/sheet-core.mjs', import.meta.url));
+  const f = url.searchParams.get('f') || '';
+  const p = url.pathname;
+  if (p === '/sheets/view') return send(200, 'text/html; charset=utf-8', fs.readFileSync(path.join(SHEETS, 'view.html')));
+  if (p === '/sheets/dist/view.js') return send(200, 'text/javascript; charset=utf-8', fs.readFileSync(path.join(SHEETS, 'dist', 'view.js')));
+  if (p === '/sheets/dist/view.css') return send(200, 'text/css; charset=utf-8', fs.readFileSync(path.join(SHEETS, 'dist', 'view.css')));
+  if (p === '/sheets/list') return send(200, 'application/json', JSON.stringify(sheetCore.listSheets()));
+  if (p === '/sheets/data') return send(200, 'application/json', fs.readFileSync(sheetCore.safePath(f, '.xlsx').replace(/\.xlsx$/i, '.univer.json')));
+  if (p === '/sheets/download') {
+    const x = sheetCore.safePath(f, '.xlsx');
+    return send(200, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', fs.readFileSync(x), { 'Content-Disposition': `attachment; filename="${path.basename(x).replace(/"/g, '')}"` });
+  }
+  if (p === '/sheets/save' && req.method === 'POST') {
+    // Only this page may save: another site open in the browser can't post here (Origin check + JSON content type).
+    if (!new RegExp(`^http://(127\\.0\\.0\\.1|localhost):${PORT}$`).test(req.headers.origin || '') || !/^application\/json/.test(req.headers['content-type'] || '')) return send(403, 'text/plain', 'forbidden');
+    const x = sheetCore.safePath(f, '.xlsx');
+    if (!fs.existsSync(x)) return send(404, 'text/plain', 'not found');
+    let size = 0; const chunks = [];
+    for await (const c of req) { if ((size += c.length) > 25e6) return send(413, 'text/plain', 'too large'); chunks.push(c); }
+    const snap = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    // Random temp names so two saves of one sheet can't collide; the snapshot is written first, the .xlsx swapped in last.
+    const tmp = `${x}.tmp-${process.pid}-${Math.random().toString(36).slice(2)}`;
+    try {
+      await sheetCore.snapshotToXlsx(snap, tmp);
+      fs.writeFileSync(x.replace(/\.xlsx$/i, '.univer.json'), JSON.stringify(snap));
+      fs.renameSync(tmp, x);
+    } finally { fs.rmSync(tmp, { force: true }); }
+    return send(200, 'text/plain', 'saved');
+  }
+  return send(404, 'text/plain', 'not found');
+}
+
 // The page may only load from this server and talk back to it; nothing in a note can call out elsewhere.
 const CSP = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'";
 const server = http.createServer((req, res) => {
@@ -167,6 +207,7 @@ const server = http.createServer((req, res) => {
     return n ? send(200, 'application/json', JSON.stringify({ ...n, task: n.sec.task || '', reply: n.sec.reply || '', verdict: n.sec['claude verdict'] || '' })) : send(404, 'text/plain', 'not found');
   }
   if (url.pathname === '/team') return send(200, 'application/json', JSON.stringify(team()));
+  if (url.pathname.startsWith('/sheets/')) return sheets(req, res, url).catch((e) => { if (!res.headersSent) { res.writeHead(400, { 'Content-Type': 'text/plain' }); res.end(String(e.message || e)); } });
   if (url.pathname === '/live') {
     // The id must be a seat listed in team.json (and filesystem-safe), so no path comes from the request alone.
     const id = url.searchParams.get('seat') || '';

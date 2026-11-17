@@ -2,3 +2,5 @@
 skill/scripts/local-only.json
 node_modules/
 *.log
+.claude/
+skill/sheets/dist/

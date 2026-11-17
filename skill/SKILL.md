@@ -26,6 +26,12 @@ Optional coding agent: `--to qoder` runs the Qoder CLI on a fresh staging copy o
 the brief's `FILE:` blocks (file tools only, no shell or web). Its reply lists the
 changed files as `FILE:` blocks plus the staging path. It spends Qoder credits.
 
+Spreadsheets: `--kind sheet` asks for `SHEET: <name>.xlsx` JSON blocks. Turn a
+reply into files with `node ~/.claude/skills/agent-hub/sheets/make-sheet.mjs
+--from <note.md>`; it prints the `.xlsx` path and a Univer preview link
+(`/sheets/view` in the live view). Check the figures before handing a sheet on,
+and never put customer data in a cloud agent's sheet brief.
+
 1. Copy each reply's `FILE:` blocks into a scratch folder and run them with
    Claude's own tests, not only the agent's. Accept `FILE:` before the fence,
    inside it, or as a comment in it.
