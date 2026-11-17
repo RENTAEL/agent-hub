@@ -15,6 +15,8 @@ import { pickSeats } from './pick-seats.mjs';
 const VAULT = process.env.OBSIDIAN_VAULT || path.join(os.homedir(), 'Documents', 'Obsidian Vault');
 const TASKS = path.join(VAULT, 'agents', 'tasks');
 const TIMEOUT_MS = 10 * 60 * 1000;
+// Same house rules for every chat seat: the reply lands in an Obsidian note that Claude reviews.
+const HOUSE = { role: 'system', content: 'You are one seat on the Agent Hub team. Claude leads and checks your answer. Your reply is pasted into an Obsidian note, so write plain Markdown: short headings, lists, code blocks. You have no tools and no file access: never write tool calls or claim you ran code. If unsure, say so. Answer only the task.' };
 // OmniRoute and OpenCode send prompts to cloud models: refuse text holding something shaped like a real credential.
 // Matches key formats and quoted secret values, not the bare words "token" or "password" that appear in normal code.
 export const SECRET = new RegExp([
@@ -31,7 +33,7 @@ export const SECRET = new RegExp([
 // Tokens that are public by design (sent to every visitor's browser) are removed before the check.
 const PUBLIC = /data-cf-beacon=('[^']*'|"[^"]*")/gi;
 export const hasSecret = (s) => SECRET.test(String(s).replace(PUBLIC, ''));
-export const CLOUD = new Set(['omniroute', 'opencode']);
+export const CLOUD = new Set(['omniroute', 'opencode', 'qoder']);
 // Run the real exe, never through cmd.exe, so a task string is never parsed as a command line.
 const OPENCODE = process.env.OPENCODE_EXE || path.join(process.env.APPDATA || '', 'npm', 'node_modules', '@opencode', 'cli', 'bin', 'opencode.exe');
 
@@ -98,7 +100,7 @@ const errText = (e) => String(e?.message ?? (typeof e === 'object' ? JSON.string
 const agents = {
   async omniroute(task, model, live = quiet) {
     const k = key();
-    const res = await post('http://localhost:20128/v1/chat/completions', { model: model || 'free', stream: true, messages: [{ role: 'user', content: task }] }, k ? { authorization: `Bearer ${k}` } : {});
+    const res = await post('http://localhost:20128/v1/chat/completions', { model: model || 'free', stream: true, messages: [HOUSE, { role: 'user', content: task }] }, k ? { authorization: `Bearer ${k}` } : {});
     let text = '', used = model || 'free', sse = false, finished = false, plain = '';
     await streamLines(res, (line) => {
       if (!line.startsWith('data:')) { plain += line + '\n'; return; }
@@ -132,7 +134,7 @@ const agents = {
       model = process.env.OLLAMA_MODEL || tags.models?.[0]?.name;
       if (!model) throw new Error('no Ollama model installed');
     }
-    const res = await post('http://localhost:11434/api/chat', { model, stream: true, messages: [{ role: 'user', content: task }] });
+    const res = await post('http://localhost:11434/api/chat', { model, stream: true, messages: [HOUSE, { role: 'user', content: task }] });
     let text = '', done = false;
     await streamLines(res, (line) => {
       let j; try { j = JSON.parse(line); } catch { return; }
@@ -154,7 +156,82 @@ const agents = {
     }
     throw new Error(errs.join(' | '));
   },
+  qoder: (task, model, live = quiet) => runQoder(task, model, live),
 };
+
+// Qoder coder: qodercli edits files, but only in a fresh staging folder holding the task's FILE: blocks.
+// File tools only (no shell, web or MCP); a write outside the folder makes qodercli stop (exit 42).
+// The reply carries every new or changed file as FILE: blocks, so Claude reviews and applies them like any other seat.
+const QODER_JS = process.env.QODER_JS || path.join(process.env.APPDATA || '', 'npm', 'node_modules', '@qoder-ai', 'qodercli', 'bundle', 'qodercli.js');
+export const STAGING = path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'agent-hub', 'staging');
+const inside = (p, root) => { const r = path.relative(root, p); return !!r && !r.startsWith('..') && !path.isAbsolute(r); };
+const FILE_BLOCK = /^FILE: ([^\r\n]+)\r?\n```[^\r\n]*\r?\n([\s\S]*?)(?:\r?\n)?```[ \t]*$/gm;
+
+export function unpackFiles(task, dir) {
+  for (const [, rel, body] of task.matchAll(FILE_BLOCK)) {
+    const p = path.resolve(dir, rel.trim());
+    if (!inside(p, dir)) throw new Error(`refused: FILE path leaves the staging folder: ${rel}`);
+    if (path.relative(dir, p).toLowerCase() === 'task.md') throw new Error('refused: TASK.md is reserved for the brief');
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, body.replace(/\\`\\`\\`/g, '```'));
+  }
+}
+
+function snapshot(dir) {
+  const files = new Map();
+  const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+    const p = path.join(d, e.name);
+    if (e.isDirectory()) { if (!['.git', 'node_modules', '__pycache__', '.qoder'].includes(e.name)) walk(p); }
+    else if (e.name !== 'TASK.md' && fs.statSync(p).size < 400_000) {
+      const buf = fs.readFileSync(p);
+      // Binary files are listed by size only, never pasted as text.
+      files.set(path.relative(dir, p).replace(/\\/g, '/'), buf.includes(0) ? `<binary, ${buf.length} bytes>` : buf.toString('utf8'));
+    }
+  } };
+  walk(dir);
+  return files;
+}
+
+function runQoder(task, model, live) {
+  fs.mkdirSync(STAGING, { recursive: true });
+  // Staging folders older than 3 days are removed; Claude has applied or dropped them by then.
+  for (const d of fs.readdirSync(STAGING)) {
+    const p = path.join(STAGING, d);
+    try { if (d.startsWith('job-') && Date.now() - fs.statSync(p).mtimeMs > 3 * 86400000) fs.rmSync(p, { recursive: true, force: true }); } catch { /* in use: next run */ }
+  }
+  const dir = fs.mkdtempSync(path.join(STAGING, 'job-'));
+  unpackFiles(task, dir);
+  const before = snapshot(dir);
+  // The task goes in a file: a long brief would overflow the Windows command line.
+  fs.writeFileSync(path.join(dir, 'TASK.md'), task);
+  const prompt = 'You are the Qoder coder seat on the Agent Hub team; Claude leads and reviews your work. The current folder is a throwaway staging copy: '
+    + 'files named in the task are already here. Read TASK.md and do the task by creating or editing files in this folder only. Never touch anything outside it. '
+    + 'You have no shell, so you cannot run code; never claim you did. Finish with a short Markdown summary of what you changed and how to run it.';
+  const args = [QODER_JS, '-p', '-w', dir, '--no-session-persistence', '-o', 'json', '--permission-mode', 'accept_edits',
+    ...(model && !model.includes('/') ? ['-m', model] : []), '--tools', 'Read', 'Write', 'Edit', 'Glob', 'Grep', '--', prompt];
+  return new Promise((resolve, reject) => {
+    const p = spawn(process.execPath, args, { cwd: dir, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    let out = '', err = '';
+    p.stdout.on('data', (d) => (out += d));
+    p.stderr.on('data', (d) => (err += d));
+    p.on('error', reject);
+    const t = setTimeout(() => { p.kill(); reject(new Error('qodercli timed out')); }, TIMEOUT_MS - 30000);
+    p.on('close', (code) => {
+      clearTimeout(t);
+      if (code === 42) return reject(new Error('qodercli stopped (exit 42): it asked for something outside the staging folder or its tools'));
+      const res = out.split(/\r?\n/).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter((j) => j?.type === 'result').pop();
+      if (code !== 0 || !res || res.is_error) return reject(new Error(`qodercli exit ${code}: ${(res?.result || err || out).slice(-300)}`));
+      const after = snapshot(dir);
+      const changed = [...after].filter(([rel, body]) => before.get(rel) !== body);
+      const deleted = [...before.keys()].filter((rel) => !after.has(rel));
+      const files = changed.map(([rel, body]) => `FILE: ${rel}\n\`\`\`${path.extname(rel).slice(1)}\n${body.replace(/```/g, '\\`\\`\\`')}\n\`\`\``)
+        .concat(deleted.map((rel) => `DELETED: ${rel}`)).join('\n\n');
+      const text = `${res.result.trim()}\n\n**Staging folder:** \`${dir}\` (${changed.length} new or changed, ${deleted.length} deleted)\n\n${files}`.trim();
+      live.write(text);
+      resolve({ text, model: `qodercli ${Object.keys(res.modelUsage || {})[0] || model || 'auto'}` });
+    });
+  });
+}
 export const OPENCODE_FREE = [
   'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free', // 1M context
   'openrouter/nvidia/nemotron-3.5-lightning:free', // 1M context
@@ -281,8 +358,9 @@ async function handle(file) {
   return true;
 }
 
-// Tasks each runner may run at once. OmniRoute spreads over many providers; Ollama shares one 8 GB GPU. Override: HUB_PARALLEL_OPENCODE=5 etc.
-export const PARALLEL = Object.fromEntries(Object.entries({ opencode: 3, omniroute: 8, ollama: 2 })
+// Tasks each runner may run at once. OmniRoute spreads over many providers; Ollama shares one 8 GB GPU; qodercli is ~750 MB per run.
+// Override: HUB_PARALLEL_OPENCODE=5 etc.
+export const PARALLEL = Object.fromEntries(Object.entries({ opencode: 3, omniroute: 8, ollama: 2, qoder: 1 })
   .map(([k, v]) => [k, Math.max(1, Number(process.env[`HUB_PARALLEL_${k.toUpperCase()}`]) || v)]));
 const inflight = new Map(); // note path -> promise
 const running = {}; // agent -> tasks in flight
@@ -344,6 +422,14 @@ if (!MAIN) {
     'risk-assessment-overview-panel', 'desk-layout-container-wide', 'https://example.com/a', 'const password = getPassword();', 'password: process.env.DB_PASS',
     `data-cf-beacon='{"version":"2024.11.0","token":"bc7b6bf00fe54ae2aa74f8890ee56059","r":1}'`])
     console.assert(!hasSecret(s), `false alarm: ${s}`);
+  const sd = fs.mkdtempSync(path.join(os.tmpdir(), 'hub-stage-'));
+  unpackFiles('FILE: src/a.py\n```py\nx = 1\n```\n', sd);
+  console.assert(fs.readFileSync(path.join(sd, 'src', 'a.py'), 'utf8') === 'x = 1', 'unpack FILE block');
+  let threw = false; try { unpackFiles('FILE: ../evil.txt\n```\nx\n```\n', sd); } catch { threw = true; }
+  console.assert(threw && !fs.existsSync(path.join(sd, '..', 'evil.txt')), 'FILE path cannot leave staging');
+  unpackFiles('FILE: empty.txt\n```\n```\n\nFILE: b.txt\n```\nb\n```\n', sd);
+  console.assert(fs.readFileSync(path.join(sd, 'empty.txt'), 'utf8') === '' && fs.readFileSync(path.join(sd, 'b.txt'), 'utf8') === 'b', 'empty FILE block');
+  fs.rmSync(sd, { recursive: true, force: true });
   console.log('selftest done (no assertion output above = pass)');
 } else if (watcherAlive()) {
   // One bridge at a time: two would both pick up the same open note.

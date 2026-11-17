@@ -2,7 +2,7 @@
 // The hub team: every free model seat the bridge can use, their health, and their live output.
 // Usage: node team.mjs --build     probe the free models and write HUB/team.json
 //        node team.mjs             list seats and their state
-// Files (see the data contract in the obsidian-wiki skill): HUB/team.json, HUB/team-state.json, HUB/live/<seat>.json
+// Files (data contract: hub-view/TEAM-CONTRACT.md): HUB/team.json, HUB/team-state.json, HUB/live/<seat>.json
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -12,7 +12,8 @@ import { fileURLToPath } from 'node:url';
 export const HUB = process.env.HUB_DIR || path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'agent-hub');
 const TEAM = path.join(HUB, 'team.json'), STATE = path.join(HUB, 'team-state.json'), LIVE = path.join(HUB, 'live');
 // Free sources only. Paid Kimi/Moonshot and non-:free OpenRouter models are never seats.
-const FREE_PROVIDERS = ['cfp', 'groq', 'gemini', 'ddgw'];
+// 'if' = Qoder (free tier, via local qodercli). Its 'qoder/' ids are aliases of the same models, so only 'if/' is used.
+const FREE_PROVIDERS = ['cfp', 'groq', 'gemini', 'ddgw', 'if'];
 const SKIP = /embed|tts|audio|image|imagen|veo|vision-only|whisper|guard|aqa|live|native-audio|transcribe|moderation|rerank|lyria|nano-banana|antigravity|deep-research|robotics|computer-use|orpheus|safety/i;
 export const OPENCODE_SEATS = [
   'openrouter/nvidia/nemotron-3-ultra-550b-a55b:free',
@@ -63,8 +64,7 @@ export function liveWriter(seat, note, job) {
 }
 
 export function gatewayKey() {
-  const k = process.env.OMNIROUTE_API_KEY || process.env.LMSTUDIO_API_KEY;
-  if (k) return k;
+  if (process.env.LMSTUDIO_API_KEY) return process.env.LMSTUDIO_API_KEY;
   if (process.platform !== 'win32') return '';
   return execFileSync('powershell', ['-NoProfile', '-Command', "[Environment]::GetEnvironmentVariable('LMSTUDIO_API_KEY','User')"], { windowsHide: true }).toString().trim();
 }
@@ -73,7 +73,8 @@ async function probe(model, key) {
   const t0 = Date.now();
   try {
     const r = await fetch('http://localhost:20128/v1/chat/completions', {
-      method: 'POST', signal: AbortSignal.timeout(30000),
+      // Qoder starts a fresh qodercli per call (25-60 s), so it gets a longer probe.
+      method: 'POST', signal: AbortSignal.timeout(model.startsWith('if/') ? 150000 : 30000),
       headers: { 'content-type': 'application/json', ...(key ? { authorization: `Bearer ${key}` } : {}) },
       body: JSON.stringify({ model, max_tokens: 20, messages: [{ role: 'user', content: 'Reply with the word OK.' }] }),
     });
@@ -89,8 +90,12 @@ async function build() {
   const cloud = ids.filter((id) => !SKIP.test(id) && (/^openrouter\/.*:free$/.test(id) || FREE_PROVIDERS.includes(id.split('/')[0])));
   const seats = [];
   // Probe six at a time: enough to finish in a minute or two without tripping provider rate limits.
-  for (let i = 0; i < cloud.length; i += 6) {
-    const batch = cloud.slice(i, i + 6);
+  // Qoder runs a ~750 MB qodercli process per call, so its seats are probed one at a time, last.
+  cloud.sort((a, b) => a.startsWith('if/') - b.startsWith('if/'));
+  for (let i = 0; i < cloud.length;) {
+    const n = cloud[i].startsWith('if/') ? 1 : 6;
+    const batch = cloud.slice(i, i + n).filter((m, k) => k === 0 || !m.startsWith('if/'));
+    i += batch.length;
     const res = await Promise.all(batch.map((m) => probe(m, key)));
     batch.forEach((model, k) => {
       const provider = model.split('/')[0];
@@ -114,7 +119,14 @@ async function build() {
 }
 
 const MAIN = !!process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
-if (MAIN && process.argv.includes('--build')) await build();
+if (MAIN && process.argv.includes('--build')) {
+  // One build at a time: a build with Qoder seats outlasts the 5-minute keep-alive, which used to stack copies.
+  const LOCK = path.join(HUB, 'team.build.lock');
+  let other = 0; try { other = Number(fs.readFileSync(LOCK, 'utf8')); process.kill(other, 0); } catch { other = 0; }
+  if (other) { console.log(`build already running (pid ${other})`); process.exit(0); }
+  fs.writeFileSync(LOCK, String(process.pid));
+  try { await build(); } finally { try { if (fs.readFileSync(LOCK, 'utf8') === String(process.pid)) fs.unlinkSync(LOCK); } catch { /* gone */ } }
+}
 else if (MAIN) {
   const st = loadState();
   for (const s of loadTeam()) console.log(`${s.ok ? (st[s.id]?.downUntil > Date.now() ? 'cool' : 'ok  ') : 'down'} ${s.provider.padEnd(10)} ${s.id}  w${st[s.id]?.wins || 0}/f${st[s.id]?.fails || 0}`);

@@ -22,6 +22,10 @@ This writes one note per agent (default `opencode,ollama,omniroute`), waits up
 to 15 minutes for every reply, and prints them. A watcher started at sign-in
 answers within 5 s; without it, hub-ask runs the bridge itself.
 
+Optional coding agent: `--to qoder` runs the Qoder CLI on a fresh staging copy of
+the brief's `FILE:` blocks (file tools only, no shell or web). Its reply lists the
+changed files as `FILE:` blocks plus the staging path. It spends Qoder credits.
+
 1. Copy each reply's `FILE:` blocks into a scratch folder and run them with
    Claude's own tests, not only the agent's. Accept `FILE:` before the fence,
    inside it, or as a comment in it.
@@ -33,7 +37,7 @@ answers within 5 s; without it, hub-ask runs the bridge itself.
    with the test score) and set `status: done`.
 5. Tell the user which agent produced what and how many rounds it took.
 
-Each agent runs several tasks at once (OpenCode 3, OmniRoute 4, Ollama 2).
+Each agent runs several tasks at once (OpenCode 3, OmniRoute 8, Ollama 2, Qoder 1).
 To fire several hub-ask jobs at once, start the watcher first
 (`agent-bridge.mjs --watch`) so their one-shot runs don't race.
 

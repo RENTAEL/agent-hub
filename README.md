@@ -22,7 +22,7 @@ flowchart LR
 
 - `hub-ask`: one command fans a brief out to every agent and waits for the replies.
 - A bridge that relays notes to each agent. Each agent works on several tasks at
-  once (OpenCode 3, OmniRoute 4, Ollama 2), oldest first.
+  once (OpenCode 3, OmniRoute 8, Ollama 2, Qoder 1), oldest first.
 - Privacy guards: secret-shaped text, key files and local-only folders never
   reach the cloud models.
 - An animated live view: team map, activity feed, and a task board
@@ -60,6 +60,7 @@ flowchart LR
 | [Ollama](https://ollama.com) | local agent, nothing leaves your PC | `ollama pull qwen2.5-coder:7b` (fits an 8 GB GPU) |
 | OmniRoute, or another OpenAI-compatible gateway | free cloud models | must answer on `http://localhost:20128/v1` |
 | [OpenCode](https://opencode.ai) CLI | coding agent on free cloud models | sign in to OpenRouter in OpenCode for the `openrouter/*:free` models |
+| Qoder CLI (`npm i -g @qoder-ai/qodercli`), optional | coding agent that edits files | sign in with `qodercli login`; the free tier spends monthly credits |
 
 You can leave out any agent. Tasks sent to a missing agent come back as `failed`,
 and `hub-ask --to` picks who gets each job.
@@ -163,6 +164,18 @@ Copy both files from `startup/` into your Startup folder (press Win+R and type
   `%LOCALAPPDATA%\agent-hub\view.log`.
 
 To run them now without signing out, double-click each file.
+
+**Or use the keep-alive instead** (recommended): it restarts the bridge, the
+live view, OmniRoute and Ollama whenever one is down, and rebuilds the team list
+every 6 hours. Run this once in PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File ~/.claude/skills/agent-hub/scripts/register-keepalive.ps1
+```
+
+It adds a Task Scheduler task, "Agent Hub keep-alive", that runs
+`scripts/keepalive.vbs` every 5 minutes and at sign-in, with no window.
+Log: `%LOCALAPPDATA%\agent-hub\keepalive.log`.
 
 ### Step 8: Tell Claude to use the team (optional)
 
@@ -269,6 +282,7 @@ Every setting is an environment variable. All are optional.
 | `HUB_PARALLEL_OPENCODE` | OpenCode tasks running at once | `3` |
 | `HUB_PARALLEL_OMNIROUTE` | OmniRoute tasks running at once | `8` |
 | `HUB_PARALLEL_OLLAMA` | Ollama tasks running at once | `2` (one 8 GB GPU) |
+| `QODER_JS` | path to qodercli's `bundle/qodercli.js` | the npm global install |
 | `HUB_VIEW_PORT` | live view port | `4317` |
 | `HUB_DIR` | team, state and live files | `%LOCALAPPDATA%\agent-hub` |
 
@@ -382,6 +396,9 @@ agent-hub/
 │   ├── scripts/
 │   │   ├── agent-bridge.mjs      relays notes to agents (--watch, --selftest)
 │   │   ├── hub-ask.mjs           fans a brief out and waits for replies
+│   │   ├── team.mjs              free-model seats, probing and failover (--build)
+│   │   ├── keepalive.mjs         restarts whatever part of the hub is down
+│   │   ├── register-keepalive.ps1  adds the 5-minute keep-alive task (Windows)
 │   │   └── local-only.example.json
 │   └── hub-view/
 │       ├── server.mjs            read-only live view on 127.0.0.1:4317

@@ -18,7 +18,8 @@ const BRIDGE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'agent-br
 // Free defaults per kind. OpenCode: the largest-context free model; the bridge falls back down OPENCODE_FREE.
 // Ollama: the coder model for both kinds; llama3.2:3b proved too weak for reviews.
 const MODELS = {
-  code: { omniroute: 'auto/coding:free', ollama: 'qwen2.5-coder:7b', opencode: OPENCODE_FREE[0] },
+  // qoder: blank = qodercli's own Auto model; it edits a staging copy of the attached files only.
+  code: { omniroute: 'auto/coding:free', ollama: 'qwen2.5-coder:7b', opencode: OPENCODE_FREE[0], qoder: '' },
   research: { omniroute: 'auto/best-free', ollama: 'qwen2.5-coder:7b', opencode: OPENCODE_FREE[0] },
 };
 const HOW = {
@@ -42,8 +43,7 @@ const { name, kind = 'code', round = '1', file, wait = '900' } = o;
 let to = o.to ? o.to.split(',').map((s) => s.trim()).filter(Boolean) : null;
 
 // Local-only folders (customer data, live keys): their jobs go to Ollama only. Longest matching path wins.
-const RULES = path.join(path.dirname(fileURLToPath(import.meta.url)), 'local-only.json');
-const rules = fs.existsSync(RULES) ? JSON.parse(fs.readFileSync(RULES, 'utf8')) : { localOnly: [], cloudOk: [] };
+const rules = JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'local-only.json'), 'utf8'));
 // Real paths, so 8.3 names, junctions and symlinks can't slip past the folder rules or the key-file names.
 const real = (p) => { try { return fs.realpathSync.native(p); } catch { return path.resolve(p); } };
 const under = (p, root) => { const r = path.relative(root, p); return !r.startsWith('..') && !path.isAbsolute(r); };
