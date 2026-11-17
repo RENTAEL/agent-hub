@@ -202,6 +202,8 @@ const T = 8, DW = 10 * T, DH = 7 * T, GAP = 3 * T, AISLE = 5 * T, WALL = 9 * T, 
 const W = 2 * SIDE + NC * DW + (NC - 1) * GAP, H = WALL + NR * (DH + AISLE) + AISLE; // 648 x 496, the svg viewBox
 const WALKER = { w:16, h:25 }; // standing sprite with arms
 const STATION_X = 402;
+// Spots idle agents jog to on the top aisle: plant, printer, water cooler, window, door.
+const SPOTS = [356, 402, 482, 552, 30], COOLER_X = 482;
 const DECOR = { door:[8,14,32,58], visitors:[46,30,160,42], board:[214,10,100,40], boss:[318,46,16,26], clock:[344,12,24,24], plant1:[344,48,24,22],
   printer:[380,40,44,30], rack:[432,6,32,64], cooler:[472,22,20,48], window:[502,10,100,36], plant2:[612,40,28,30] };
 const deskAt = (i) => { const c = i % NC, r = (i / NC) | 0; return { c, r, x:SIDE + c * (DW + GAP), y:WALL + AISLE + r * (DH + AISLE), w:DW, h:DH }; };
@@ -342,7 +344,9 @@ const parts = [...Array(40)].map(() => ({ e:R(partLayer, 0, 0, 2, 2, '#fde047', 
 
 let team = { seats:[], claude:[] };
 const seatEls = new Map(); // id -> office seat object
-let floors = [], floorIx = 0, walker = null;
+let floors = [], floorIx = 0;
+const walkers = new Set(); // people out of their seats on the shown floor
+const MAX_WALK = 6, MAX_ROAM = 4; // roamers leave room for agents fetching a task
 let layoutKey = null, agKey = null; // null so an empty team still lays out once (shows the hint)
 let openSeat = null, liveES = null; // the seat drawer and its live stream
 const ACTIVE = new Set(['thinking', 'writing']);
@@ -395,7 +399,7 @@ const envAt = (o, x, y, op) => { set(o.env, 'transform', `translate(${x},${y})`)
 
 function layout() {
   for (const o of seatEls.values()) home(o);
-  deskLayer.replaceChildren(); seatEls.clear(); walker = null;
+  deskLayer.replaceChildren(); seatEls.clear(); walkers.clear();
   for (const p of parts) { p.life = 0; show(p.e, false); }
   floors = packFloors(team.seats);
   floorIx = Math.min(floorIx, Math.max(0, floors.length - 1));
@@ -439,7 +443,7 @@ $('seatList').addEventListener('click', (e) => pick(e.target.closest('[data-seat
 // Ends any animation and puts the person back at the desk in the still pose for its state.
 function home(o) {
   if (o.P.g.parentNode === walkLayer) o.g.insertBefore(o.P.g, o.deskTop);
-  if (walker === o) walker = null;
+  walkers.delete(o); o.trip = null; o.pos = null;
   set(o.P.g, 'transform', 'translate(15,10)'); show(o.P.paper, false); show(o.env, false); endAct(o);
   if (['envIn', 'wait', 'walk', 'done'].includes(o.mode)) mode(o, o.k === 'work' ? 'work' : o.k === 'bad' ? 'error' : o.k === 'off' ? 'off' : 'idle');
 }
@@ -488,10 +492,10 @@ function spark(o, colors) {
   p.x = o.d.x + 3 + Math.random() * 8; p.y = o.d.y + 14 + Math.random() * 12; p.vx = (Math.random() - .5) * .02; p.vy = -.02 - Math.random() * .02;
   p.life = 260 + Math.random() * 500; p.o = o; set(p.e, 'fill', colors[(Math.random() * colors.length) | 0]); show(p.e, true);
 }
-// Walk route: up into the aisle above the desk, along it to the nearest side lane, up to the top aisle, across to the printer.
-function route(o) {
+// Walk route: up into the aisle above the desk, along it to the nearest side lane, up to the top aisle, across to the spot.
+function route(o, to = STATION_X) {
   const { x, y, c, r } = o.d, fx = x + 22, top = laneY(0) + 10, side = c < NC / 2 ? SIDE / 2 : W - SIDE / 2;
-  const pts = r === 0 ? [[fx, y + 28], [fx, top], [STATION_X, top]] : [[fx, y + 28], [fx, y - 10], [side, y - 10], [side, top], [STATION_X, top]];
+  const pts = r === 0 ? [[fx, y + 28], [fx, top], [to, top]] : [[fx, y + 28], [fx, y - 10], [side, y - 10], [side, top], [to, top]];
   let L = 0; const seg = pts.slice(1).map((p, j) => { const l = Math.hypot(p[0] - pts[j][0], p[1] - pts[j][1]); L += l; return l; });
   return { pts, seg, L };
 }
@@ -502,7 +506,46 @@ function along(rt, d) {
   }
   return rt.pts[rt.pts.length - 1];
 }
-const SPEED = .11, PAUSE = 700; // px per ms; time at the printer
+// Walkers never overlap: each step is taken only if the walker's box stays clear of every other walker's box.
+const wbox = (x, y) => ({ x:x - 8, y:y - 25, w:16, h:25 });
+function blocked(o, x, y) {
+  const a = wbox(x, y);
+  for (const w of walkers) {
+    if (w === o || !w.pos) continue;
+    const b = wbox(w.pos[0], w.pos[1]);
+    if (a.x < b.x + b.w + 2 && b.x < a.x + a.w + 2 && a.y < b.y + b.h + 2 && b.y < a.y + a.h + 2) return true;
+  }
+  return false;
+}
+// kind 'task': walk to the printer for the job. kind 'roam': an idle agent jogs to a spot and back.
+function startTrip(o, t, kind) {
+  const to = kind === 'task' ? STATION_X : SPOTS[(Math.random() * SPOTS.length) | 0];
+  endAct(o); bubble(o, null); show(o.env, false);
+  o.trip = { kind, rt:route(o, to), dir:1, held:0, speed:kind === 'task' ? .13 : .17, pause:kind === 'task' ? 700 : 1000 + Math.random() * 1600, at:to === COOLER_X ? 'sip' : 'stand' };
+  o.dist = 0; o.lt = t; o.pos = null; o.mode = 'walk'; o.t0 = t;
+  walkers.add(o); walkLayer.appendChild(o.P.g);
+}
+function endTrip(o, t) {
+  const kind = o.trip.kind;
+  home(o); settle(o, kind === 'task' ? 'work' : 'idle');
+  o.nextAct = t + 6000 + Math.random() * 10000;
+}
+function walkStep(o, t) {
+  const tr = o.trip, step = Math.min(50, t - o.lt) * tr.speed; o.lt = t;
+  if (tr.dir === 0) { if (t > tr.until) tr.dir = -1; return; }
+  const nd = Math.max(0, Math.min(tr.rt.L, o.dist + tr.dir * step)), [x, y] = along(tr.rt, nd);
+  if (blocked(o, x, y)) { // hold; turn back after 1.2 s, give up and sit down after 2.5 s, so nobody waits forever
+    tr.held = tr.held || t; pose(o.P, 'stand');
+    if (t - tr.held > 2500) endTrip(o, t);
+    else if (t - tr.held > 1200 && tr.dir === 1) { tr.dir = -1; tr.held = t; }
+    return;
+  }
+  tr.held = 0; o.dist = nd; o.pos = [x, y];
+  set(o.P.g, 'transform', `translate(${Math.round(x - 7)},${Math.round(y - 24)})`);
+  pose(o.P, 'walk' + (((nd / 5) | 0) % 4));
+  if (tr.dir === 1 && nd === tr.rt.L) { tr.dir = 0; tr.until = t + tr.pause; pose(o.P, tr.at); show(o.P.paper, tr.kind === 'task'); }
+  else if (tr.dir === -1 && nd === 0) endTrip(o, t);
+}
 function animSeat(o, t) {
   const dt = Math.max(0, t - o.t0);
   if (t > o.bt) { const shut = o.P.eyeL.getAttribute('height') === '1'; set(o.P.eyeL, 'height', shut ? 2 : 1); set(o.P.eyeR, 'height', shut ? 2 : 1); o.bt = t + (shut ? 2500 + Math.random() * 4000 : 120); }
@@ -511,7 +554,7 @@ function animSeat(o, t) {
       if (o.act) {
         if (t > o.actEnd) { endAct(o); o.nextAct = t + 8000 + Math.random() * 12000; }
         else if (o.act === 'look' && t > o.nt) { o.nt = t + 450; const dx = Math.random() < .5 ? 1 : -1; set(o.P.eyeL, 'x', 4 + dx); set(o.P.eyeR, 'x', 9 + dx); }
-      } else if (t > o.nextAct) startAct(o, t);
+      } else if (t > o.nextAct) { if (Math.random() < .55 && walkers.size < MAX_ROAM) startTrip(o, t, 'roam'); else startAct(o, t); }
       else if (t > o.nt) { o.nt = t + 380 + Math.random() * 520; pose(o.P, Math.random() < .5 ? 'type0' : 'type1'); if (Math.random() < .35) code(o); }
       break;
     case 'envIn': { // the task slides in along the bubble row, above the monitor
@@ -519,20 +562,13 @@ function animSeat(o, t) {
       if (p === 1) { o.mode = 'wait'; o.t0 = t; }
       break;
     }
-    case 'wait': // one walker per floor at a time, so walkers never overlap; give up after 6 s and just work
-      if (!walker) { walker = o; show(o.env, false); o.rt = route(o); o.mode = 'walk'; o.t0 = t; walkLayer.appendChild(o.P.g); }
+    case 'wait': // the office is busy: wait for a free slot, give up after 6 s and just work
+      if (walkers.size < MAX_WALK) startTrip(o, t, 'task');
       else if (dt > 6000) { show(o.env, false); settle(o, 'work'); }
       break;
-    case 'walk': {
-      const L = o.rt.L, out = L / SPEED;
-      const d = dt < out ? dt * SPEED : dt < out + PAUSE ? L : Math.max(0, L - (dt - out - PAUSE) * SPEED);
-      const [x, y] = along(o.rt, d);
-      set(o.P.g, 'transform', `translate(${Math.round(x - 7)},${Math.round(y - 24)})`);
-      pose(o.P, d === L ? 'stand' : 'walk' + (((d / 5) | 0) % 4));
-      show(o.P.paper, dt > out + PAUSE / 2);
-      if (dt > out + PAUSE && d === 0) { home(o); walker = null; settle(o, 'work'); }
+    case 'walk':
+      walkStep(o, t);
       break;
-    }
     case 'work':
       if (t > o.nt) { o.nt = t + 90; pose(o.P, o.P.pose === 'type0' ? 'type1' : 'type0'); code(o); if (Math.random() < .6) spark(o, ['#fde047', '#fb923c']); }
       break;
@@ -560,7 +596,7 @@ function frame(t) {
     set(sky, 'fill', m >= 360 && m < 1110 ? '#7dd3fc' : m >= 300 && m < 1170 ? '#fdba74' : '#1e1b4b');
   }
   if (still) return;
-  if (t > ledT) { ledT = t + 260; leds.forEach((l) => Math.random() < .3 && set(l, 'opacity', Math.random() < .5 ? .25 : 1)); set(printLed, 'opacity', walker ? (t % 500 < 250 ? 1 : .2) : 1); }
+  if (t > ledT) { ledT = t + 260; leds.forEach((l) => Math.random() < .3 && set(l, 'opacity', Math.random() < .5 ? .25 : 1)); set(printLed, 'opacity', [...walkers].some((w) => w.trip.kind === 'task') ? (t % 500 < 250 ? 1 : .2) : 1); }
   if (t > visT) { visT = t + 650; visBob ^= 1; visitors.forEach((v) => v.run && set(v.P.in, 'transform', `translate(0,${visBob ? -1 : 0})`)); }
   for (const o of (floors[floorIx] || {}).objs || []) animSeat(o, t);
   for (const p of parts) {

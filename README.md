@@ -349,7 +349,8 @@ Paid models are never added. `node team.mjs` lists the seats and their wins and 
   The live view is a pixel-art office with one desk per seat, 24 desks per
   floor (tabs). When a seat gets a task, an envelope arrives, the agent walks to
   the printer and back, then types; it stretches when done and shows a red "!"
-  on errors. Offline seats are out to lunch. Claude stands at the whiteboard
+  on errors. Idle agents jog to the water cooler, window, printer, plants or
+  door now and then; walkers never overlap. Offline seats are out to lunch. Claude stands at the whiteboard
   with the review count, and its subagents wait by the door. Click or press
   Enter on a desk to watch its output stream live. Phones get a list instead,
   and reduced-motion settings get a still scene.
