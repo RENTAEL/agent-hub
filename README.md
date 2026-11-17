@@ -346,8 +346,13 @@ Paid models are never added. `node team.mjs` lists the seats and their wins and 
 - **Private work.** Notes marked `local: true`, or holding a credential, only
   ever run on, or fail over to, local seats.
 - **Live view.** Each seat streams its thinking and answer to `live/<seat>.json`.
-  On the live view, each provider is a cluster of dots around Claude: busy seats
-  glow, failing seats turn red. Click a dot to watch its output stream live.
+  The live view is a pixel-art office with one desk per seat, 24 desks per
+  floor (tabs). When a seat gets a task, an envelope arrives, the agent walks to
+  the printer and back, then types; it stretches when done and shows a red "!"
+  on errors. Offline seats are out to lunch. Claude stands at the whiteboard
+  with the review count, and its subagents wait by the door. Click or press
+  Enter on a desk to watch its output stream live. Phones get a list instead,
+  and reduced-motion settings get a still scene.
 - **Claude's own subagents.** To show them on the map, add
   `scripts/hub-claude-hook.mjs` as a `SubagentStart` and `SubagentStop` command
   hook in Claude Code.
