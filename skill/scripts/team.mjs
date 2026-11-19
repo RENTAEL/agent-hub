@@ -63,10 +63,13 @@ export function liveWriter(seat, note, job) {
   };
 }
 
+// OMNIROUTE_API_KEY is the documented name; LMSTUDIO_API_KEY still works.
+// User-level values are read too, so a key set after the bridge started is found.
 export function gatewayKey() {
-  if (process.env.LMSTUDIO_API_KEY) return process.env.LMSTUDIO_API_KEY;
-  if (process.platform !== 'win32') return '';
-  return execFileSync('powershell', ['-NoProfile', '-Command', "[Environment]::GetEnvironmentVariable('LMSTUDIO_API_KEY','User')"], { windowsHide: true }).toString().trim();
+  const env = process.env.OMNIROUTE_API_KEY || process.env.LMSTUDIO_API_KEY;
+  if (env || process.platform !== 'win32') return env || '';
+  const ps = "$e=[Environment]; $k=$e::GetEnvironmentVariable('OMNIROUTE_API_KEY','User'); if (-not $k) { $k=$e::GetEnvironmentVariable('LMSTUDIO_API_KEY','User') }; $k";
+  return execFileSync('powershell', ['-NoProfile', '-Command', ps], { windowsHide: true }).toString().trim();
 }
 
 async function probe(model, key) {
@@ -86,7 +89,9 @@ async function probe(model, key) {
 
 async function build() {
   const key = gatewayKey();
-  const ids = (await fetch('http://localhost:20128/v1/models', { headers: key ? { authorization: `Bearer ${key}` } : {} }).then((r) => r.json())).data.map((m) => m.id);
+  const list = await fetch('http://localhost:20128/v1/models', { headers: key ? { authorization: `Bearer ${key}` } : {} }).then((r) => r.json());
+  if (!Array.isArray(list.data)) throw new Error(`OmniRoute /v1/models gave no model list${key ? '' : ' (no OMNIROUTE_API_KEY set; OmniRoute needs one once it has a password)'}: ${JSON.stringify(list.error || list).slice(0, 200)}`);
+  const ids = list.data.map((m) => m.id);
   const cloud = ids.filter((id) => !SKIP.test(id) && (/^openrouter\/.*:free$/.test(id) || FREE_PROVIDERS.includes(id.split('/')[0])));
   const seats = [];
   // Probe six at a time: enough to finish in a minute or two without tripping provider rate limits.
@@ -126,6 +131,7 @@ if (MAIN && process.argv.includes('--build')) {
   const LOCK = path.join(HUB, 'team.build.lock');
   let other = 0; try { other = Number(fs.readFileSync(LOCK, 'utf8')); process.kill(other, 0); } catch { other = 0; }
   if (other) { console.log(`build already running (pid ${other})`); process.exit(0); }
+  fs.mkdirSync(HUB, { recursive: true }); // first run on a new PC: the hub folder may not exist yet
   fs.writeFileSync(LOCK, String(process.pid));
   try { await build(); } finally { try { if (fs.readFileSync(LOCK, 'utf8') === String(process.pid)) fs.unlinkSync(LOCK); } catch { /* gone */ } }
 }
