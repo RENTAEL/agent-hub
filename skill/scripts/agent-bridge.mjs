@@ -401,7 +401,9 @@ async function runOnce() {
 }
 
 // Run only when started directly, so hub-ask.mjs can import SECRET and CLOUD.
-const MAIN = !!process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+// Compare real paths: started through a junction or symlink, argv[1] and import.meta.url differ.
+const real = (p) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
+const MAIN = !!process.argv[1] && real(process.argv[1]) === real(fileURLToPath(import.meta.url));
 if (!MAIN) {
   // imported as a module
 } else if (process.argv.includes('--selftest')) {

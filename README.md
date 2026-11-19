@@ -122,7 +122,12 @@ Override per job with `--model omniroute=<model id>`.
 ### Step 5: Set up OpenCode
 
 1. Install the OpenCode CLI so `opencode` is on your PATH, or set `OPENCODE_EXE`
-   to the full path of the executable.
+   to the full path of the executable. It must support `opencode run --standalone`:
+   the CLI bundled with OpenCode Desktop 2.x does
+   (`%APPDATA%\ai.opencode.desktop\cli\<version>-x64\opencode-cli.exe`), while the
+   npm `opencode-ai` 1.19 package does not and every run fails with its help text.
+   On Windows, point `OPENCODE_EXE` at an `.exe`; the npm `opencode` shim can't be
+   spawned directly (`spawn opencode ENOENT`).
 2. Copy `opencode/agent-hub.md` to `~/.config/opencode/instructions/agent-hub.md`.
 3. Sign in to OpenRouter in OpenCode (`opencode auth login`).
 

@@ -118,7 +118,9 @@ async function build() {
   console.log(`${seats.length} seats, ${seats.filter((s) => s.ok).length} ok -> ${TEAM}`);
 }
 
-const MAIN = !!process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+// Compare real paths: started through a junction or symlink, argv[1] and import.meta.url differ.
+const real = (p) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
+const MAIN = !!process.argv[1] && real(process.argv[1]) === real(fileURLToPath(import.meta.url));
 if (MAIN && process.argv.includes('--build')) {
   // One build at a time: a build with Qoder seats outlasts the 5-minute keep-alive, which used to stack copies.
   const LOCK = path.join(HUB, 'team.build.lock');
